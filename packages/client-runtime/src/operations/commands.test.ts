@@ -24,6 +24,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
   createProject,
+  mutateThreadInputQueue,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -116,6 +117,40 @@ describe("environment commands", () => {
           commandId: "queued-command",
           threadId: "thread-1",
           createdAt: "2026-06-06T00:01:00.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches input queue mutation commands", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* mutateThreadInputQueue({
+        commandId: CommandId.make("queue-mutation-command"),
+        threadId: ThreadId.make("thread-1"),
+        mutation: {
+          type: "remove",
+          mode: "steer",
+          index: 1,
+          expectedText: "second steering message",
+        },
+        createdAt: "2026-06-06T00:02:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "thread.input-queue.mutate",
+          commandId: "queue-mutation-command",
+          threadId: "thread-1",
+          mutation: {
+            type: "remove",
+            mode: "steer",
+            index: 1,
+            expectedText: "second steering message",
+          },
+          createdAt: "2026-06-06T00:02:00.000Z",
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

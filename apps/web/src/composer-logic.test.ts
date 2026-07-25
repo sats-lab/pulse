@@ -8,6 +8,7 @@ import {
   isCollapsedCursorAdjacentToInlineToken,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
+  resolvePiMidTurnInputMode,
   shouldSubmitComposerOnEnter,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
@@ -23,6 +24,29 @@ describe("shouldSubmitComposerOnEnter", () => {
 
   it("inserts a newline for Shift+Enter", () => {
     expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: true })).toBe(false);
+  });
+});
+
+describe("resolvePiMidTurnInputMode", () => {
+  it("uses steering for plain Enter while Pi is running", () => {
+    expect(resolvePiMidTurnInputMode({ provider: "pi", isRunning: true, altKey: false })).toBe(
+      "steer",
+    );
+  });
+
+  it("uses follow-up for Alt or Option+Enter while Pi is running", () => {
+    expect(resolvePiMidTurnInputMode({ provider: "pi", isRunning: true, altKey: true })).toBe(
+      "followUp",
+    );
+  });
+
+  it("does not apply Pi mid-turn semantics outside a running Pi turn", () => {
+    expect(resolvePiMidTurnInputMode({ provider: "pi", isRunning: false, altKey: true })).toBe(
+      undefined,
+    );
+    expect(resolvePiMidTurnInputMode({ provider: "codex", isRunning: true, altKey: true })).toBe(
+      undefined,
+    );
   });
 });
 

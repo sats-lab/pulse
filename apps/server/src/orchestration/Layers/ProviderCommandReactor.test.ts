@@ -234,6 +234,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const mutateInputQueue = vi.fn<ProviderServiceShape["mutateInputQueue"]>(() => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const stopSession = vi.fn((input: unknown) =>
@@ -310,6 +311,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
+      mutateInputQueue,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
@@ -489,6 +491,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       interruptTurn,
+      mutateInputQueue,
       respondToRequest,
       respondToUserInput,
       stopSession,
@@ -2354,6 +2357,53 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  effectIt.effect("reacts to input queue mutation requests", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-queue"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "pi",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.input-queue.mutate",
+        commandId: CommandId.make("cmd-queue-remove"),
+        threadId: ThreadId.make("thread-1"),
+        mutation: {
+          type: "remove",
+          mode: "steer",
+          index: 0,
+          expectedText: "change direction",
+        },
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() => waitFor(() => harness.mutateInputQueue.mock.calls.length === 1));
+      expect(harness.mutateInputQueue.mock.calls[0]?.[0]).toEqual({
+        threadId: "thread-1",
+        mutation: {
+          type: "remove",
+          mode: "steer",
+          index: 0,
+          expectedText: "change direction",
+        },
+      });
+    }),
+  );
+
   it("starts a fresh session when only projected session state exists", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2811,4 +2861,33 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
   });
+
+  effectIt.effect("forwards the requested Pi mid-turn input mode", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-follow-up"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-follow-up"),
+          role: "user",
+          text: "do this after the current response",
+          attachments: [],
+        },
+        midTurnInputMode: "followUp",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId: ThreadId.make("thread-1"),
+        midTurnInputMode: "followUp",
+      });
+    }),
+  );
 });

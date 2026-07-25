@@ -221,6 +221,7 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection, undefined);
+    assert.strictEqual(parsed.midTurnInputMode, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
@@ -243,9 +244,11 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
         model: "gpt-5.4",
       },
       runtimeMode: "full-access",
+      midTurnInputMode: "followUp",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
+    assert.strictEqual(parsed.midTurnInputMode, "followUp");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
@@ -335,6 +338,71 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
     assert.strictEqual(parsed.previousTitle, "Previous title");
     assert.strictEqual(parsed.titleRegeneration?.requestId, "cmd-title-regenerate");
     assert.strictEqual(parsed.modelSelection?.instanceId, "claudeAgent");
+  }),
+);
+
+it.effect("decodes provider input queue mutation commands", () =>
+  Effect.gen(function* () {
+    const clearAll = yield* decodeOrchestrationCommand({
+      type: "thread.input-queue.mutate",
+      commandId: "cmd-queue-clear-all",
+      threadId: "thread-1",
+      mutation: { type: "clear-all" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const clearSteering = yield* decodeOrchestrationCommand({
+      type: "thread.input-queue.mutate",
+      commandId: "cmd-queue-clear-steering",
+      threadId: "thread-1",
+      mutation: { type: "clear-mode", mode: "steer" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const removeFollowUp = yield* decodeOrchestrationCommand({
+      type: "thread.input-queue.mutate",
+      commandId: "cmd-queue-remove-follow-up",
+      threadId: "thread-1",
+      mutation: {
+        type: "remove",
+        mode: "followUp",
+        index: 2,
+        expectedText: "third follow-up",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(clearAll.type, "thread.input-queue.mutate");
+    assert.strictEqual(clearSteering.type, "thread.input-queue.mutate");
+    assert.strictEqual(removeFollowUp.type, "thread.input-queue.mutate");
+    if (
+      clearAll.type !== "thread.input-queue.mutate" ||
+      clearSteering.type !== "thread.input-queue.mutate" ||
+      removeFollowUp.type !== "thread.input-queue.mutate"
+    ) {
+      return assert.fail("queue mutations decoded as the wrong command type");
+    }
+    assert.deepStrictEqual(clearAll.mutation, { type: "clear-all" });
+    assert.deepStrictEqual(clearSteering.mutation, { type: "clear-mode", mode: "steer" });
+    assert.deepStrictEqual(removeFollowUp.mutation, {
+      type: "remove",
+      mode: "followUp",
+      index: 2,
+      expectedText: "third follow-up",
+    });
+  }),
+);
+
+it.effect("rejects stale-guard-free individual queue removal commands", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.input-queue.mutate",
+        commandId: "cmd-queue-remove-invalid",
+        threadId: "thread-1",
+        mutation: { type: "remove", mode: "steer", index: 0 },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 
