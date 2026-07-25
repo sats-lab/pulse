@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 
+import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -35,7 +36,7 @@ import {
 import { ensurePinnedRuntimeInstalled, removePinnedRuntimeInstallation } from "./pinnedRuntime.ts";
 
 /**
- * Lets a connected client replace this server with another published `t3`
+ * Lets a connected client replace this server with another published Pulse
  * version over RPC — the only update path that works when the user is not at
  * the machine (phone against a home server, relay-managed box). The target
  * version is npm-installed into the pinned runtime and verified before
@@ -75,7 +76,8 @@ function normalizeEntryPath(entryPath: string): string {
  * npm identity, and the desktop manages its own updates.
  */
 export function isPublishedCliEntry(entryPath: string): boolean {
-  return normalizeEntryPath(entryPath).includes("/node_modules/t3/dist/");
+  const packagePath = packageJson.name.split("/").join("/");
+  return normalizeEntryPath(entryPath).includes(`/node_modules/${packagePath}/dist/`);
 }
 
 /**
@@ -241,7 +243,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* (option
     const activeMethod = capability;
     const targetVersion = input.targetVersion.trim();
     if (!EXACT_VERSION_PATTERN.test(targetVersion)) {
-      return yield* failWith(`'${targetVersion}' is not an exact t3 version.`);
+      return yield* failWith(`'${targetVersion}' is not an exact Pulse version.`);
     }
 
     const alreadyRunning = yield* Ref.getAndSet(inFlight, true);
@@ -257,7 +259,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* (option
         path,
         runner,
       }).pipe(
-        Effect.mapError((error) => failWith("Could not install the requested t3 version.", error)),
+        Effect.mapError((error) =>
+          failWith("Could not install the requested Pulse version.", error),
+        ),
       );
 
       // A broken artifact (failed native build, incompatible node) must be
@@ -270,7 +274,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* (option
         })
         .pipe(
           Effect.mapError((cause) =>
-            failWith(`Could not verify the installed t3@${targetVersion}.`, cause),
+            failWith(`Could not verify the installed ${packageJson.name}@${targetVersion}.`, cause),
           ),
         );
       // Effect CLI's unstable formatVersion currently emits `${name} v${version}`.
@@ -287,13 +291,16 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* (option
           path,
         }).pipe(
           Effect.mapError((error) =>
-            failWith(`Could not remove the failed t3@${targetVersion} installation.`, error),
+            failWith(
+              `Could not remove the failed ${packageJson.name}@${targetVersion} installation.`,
+              error,
+            ),
           ),
         );
         return yield* failWith(
           preflight.code !== 0
-            ? `The installed t3@${targetVersion} failed its version check (exit code ${String(preflight.code)}).`
-            : `The installed runtime did not report the requested t3@${targetVersion} version.`,
+            ? `The installed ${packageJson.name}@${targetVersion} failed its version check (exit code ${String(preflight.code)}).`
+            : `The installed runtime did not report the requested ${packageJson.name}@${targetVersion} version.`,
         );
       }
 

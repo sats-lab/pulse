@@ -21,7 +21,7 @@ import { ensurePinnedRuntimeInstalled, pinnedRuntimePaths } from "./pinnedRuntim
 /**
  * Installs T3 Code as a per-user boot service. Linux-only for now: systemd
  * user unit + loginctl enable-linger. The service runs a stable or pinned
- * runtime — never an ephemeral `npx t3` cache whose eviction could break
+ * runtime — never an ephemeral `npx @sats-lab/pulse` cache whose eviction could break
  * startup.
  */
 
@@ -39,7 +39,7 @@ const EPHEMERAL_CACHE_SEGMENTS = [
 ];
 
 /**
- * `npx t3` (and pnpm dlx / bunx) run out of ephemeral package-manager
+ * `npx @sats-lab/pulse` (and pnpm dlx / bunx) run out of ephemeral package-manager
  * caches that can be evicted at any time — a boot service must never point
  * there. Global installs, repo checkouts, and the pinned runtime below are
  * all stable.
@@ -249,7 +249,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
    * install (global bin, repo checkout) is used as-is; an ephemeral cache
    * entry is replaced by `npm install --prefix`-ing the exact running
    * version into <baseDir>/runtime/versions/<v>. A real install (not a copy
-   * of bin.mjs) because t3 ships native deps like node-pty.
+   * of bin.mjs) because Pulse ships native deps like node-pty.
    */
   const ensurePinnedRuntime = Effect.gen(function* () {
     if (!isEphemeralCacheEntry(host.cliEntryPath)) {

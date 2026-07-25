@@ -91,7 +91,7 @@ const makeTestContext = Effect.fn("test.makeTestContext")(function* () {
 it("renders a systemd unit with absolute paths and append-mode logging", () => {
   const unit = BootService.renderBootServiceUnit({
     nodePath: "/usr/local/bin/node",
-    t3EntryPath: "/home/theo/.t3/runtime/versions/0.0.27/node_modules/t3/dist/bin.mjs",
+    t3EntryPath: "/home/theo/.t3/runtime/versions/0.0.27/node_modules/@sats-lab/pulse/dist/bin.mjs",
     baseDir: "/home/theo/.t3",
     logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
     unitPath: "/home/theo/.config/systemd/user/t3code.service",
@@ -110,7 +110,7 @@ it("renders a systemd unit with absolute paths and append-mode logging", () => {
       "WorkingDirectory=%h",
       "Environment=T3CODE_HOME=/home/theo/.t3",
       "Environment=T3_BOOT_SERVICE_UNIT=t3code.service",
-      "ExecStart=/usr/local/bin/node /home/theo/.t3/runtime/versions/0.0.27/node_modules/t3/dist/bin.mjs serve",
+      "ExecStart=/usr/local/bin/node /home/theo/.t3/runtime/versions/0.0.27/node_modules/@sats-lab/pulse/dist/bin.mjs serve",
       "Restart=always",
       "RestartSec=5",
       "StandardOutput=append:/home/theo/.t3/userdata/logs/boot-service.log",
@@ -145,28 +145,34 @@ it("quotes systemd values containing spaces and escapes percent specifiers", () 
 
 it("flags package-manager cache entry points as ephemeral", () => {
   assert.isTrue(
-    BootService.isEphemeralCacheEntry("/home/theo/.npm/_npx/abc123/node_modules/t3/dist/bin.mjs"),
+    BootService.isEphemeralCacheEntry(
+      "/home/theo/.npm/_npx/abc123/node_modules/@sats-lab/pulse/dist/bin.mjs",
+    ),
   );
   assert.isTrue(
     BootService.isEphemeralCacheEntry("C:\\Users\\theo\\AppData\\npm-cache\\_npx\\abc\\bin.mjs"),
   );
   assert.isTrue(
     BootService.isEphemeralCacheEntry(
-      "/home/theo/.cache/pnpm/dlx/abc/node_modules/t3/dist/bin.mjs",
+      "/home/theo/.cache/pnpm/dlx/abc/node_modules/@sats-lab/pulse/dist/bin.mjs",
     ),
   );
   assert.isTrue(
-    BootService.isEphemeralCacheEntry("/home/theo/.bun/install/cache/t3@0.0.27/dist/bin.mjs"),
+    BootService.isEphemeralCacheEntry(
+      "/home/theo/.bun/install/cache/@sats-lab/pulse@0.0.27/dist/bin.mjs",
+    ),
   );
-  assert.isFalse(BootService.isEphemeralCacheEntry("/usr/local/lib/node_modules/t3/dist/bin.mjs"));
+  assert.isFalse(
+    BootService.isEphemeralCacheEntry("/usr/local/lib/node_modules/@sats-lab/pulse/dist/bin.mjs"),
+  );
   assert.isFalse(
     BootService.isEphemeralCacheEntry(
-      "/home/theo/dev/pnpm/dlx-tools/t3/node_modules/t3/dist/bin.mjs",
+      "/home/theo/dev/pnpm/dlx-tools/t3/node_modules/@sats-lab/pulse/dist/bin.mjs",
     ),
   );
   assert.isFalse(
     BootService.isEphemeralCacheEntry(
-      "/home/theo/.t3/runtime/versions/0.0.27/node_modules/t3/dist/bin.mjs",
+      "/home/theo/.t3/runtime/versions/0.0.27/node_modules/@sats-lab/pulse/dist/bin.mjs",
     ),
   );
 });
@@ -254,7 +260,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(Effect.provide(makeRecordingRunnerLayer(commands)), provideHostRefs(dirs.home));
 
       const plan = yield* service.install;
@@ -262,11 +268,18 @@ it.layer(NodeServices.layer)("BootService", (it) => {
       const runtimeDir = path.join(dirs.baseDir, "runtime", "versions", "0.0.27");
       assert.equal(
         plan.t3EntryPath,
-        path.join(runtimeDir, "node_modules", "t3", "dist", "bin.mjs"),
+        path.join(runtimeDir, "node_modules", "@sats-lab", "pulse", "dist", "bin.mjs"),
       );
       assert.deepEqual(commands[0], {
         command: "npm",
-        args: ["install", "--prefix", runtimeDir, "--no-fund", "--no-audit", "t3@0.0.27"],
+        args: [
+          "install",
+          "--prefix",
+          runtimeDir,
+          "--no-fund",
+          "--no-audit",
+          "@sats-lab/pulse@0.0.27",
+        ],
       });
       // Success is recorded via a sentinel so interrupted installs re-run.
       assert.isTrue(yield* fs.exists(path.join(runtimeDir, ".install-complete")));
@@ -281,7 +294,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(Effect.provide(makeRecordingRunnerLayer(commands)), provideHostRefs(dirs.home));
 
       const plan = yield* service.install;
@@ -325,7 +338,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/home/theo/.npm/_npx/abc/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(
         Effect.provide(makeRecordingRunnerLayer(commands, { failCommand: "npm" })),
         provideHostRefs(dirs.home),
@@ -396,7 +409,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/usr/local/lib/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/usr/local/lib/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(
         Effect.provide(makeRecordingRunnerLayer(commands)),
         provideHostRefs(dirs.home, "darwin"),
@@ -423,7 +436,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/usr/local/lib/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/usr/local/lib/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(
         Effect.provide(makeRecordingRunnerLayer(commands, { failCommand: "loginctl" })),
         provideHostRefs(dirs.home),
@@ -538,7 +551,7 @@ it.layer(NodeServices.layer)("BootService", (it) => {
         baseDir: dirs.baseDir,
         logsDir: dirs.logsDir,
         cliVersion: "0.0.27",
-        host: makeHost("/usr/local/lib/node_modules/t3/dist/bin.mjs"),
+        host: makeHost("/usr/local/lib/node_modules/@sats-lab/pulse/dist/bin.mjs"),
       }).pipe(
         Effect.provide(makeRecordingRunnerLayer(commands, { failCommand: "systemctl" })),
         provideHostRefs(dirs.home),
