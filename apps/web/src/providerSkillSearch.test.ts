@@ -48,6 +48,20 @@ describe("searchProviderSkills", () => {
     expect(searchProviderSkills(skills, "gfc").map((skill) => skill.name)).toEqual(["gh-fix-ci"]);
   });
 
+  it("includes manually invocable Pi skills exposed as enabled discovery results", () => {
+    const skills = [
+      makeSkill({
+        name: "grill-me",
+        displayName: "Grill Me",
+        description: "Manually challenge the current approach",
+        enabled: true,
+      }),
+    ];
+
+    expect(searchProviderSkills(skills, "").map((skill) => skill.name)).toEqual(["grill-me"]);
+    expect(searchProviderSkills(skills, "grill").map((skill) => skill.name)).toEqual(["grill-me"]);
+  });
+
   it("omits disabled skills from results", () => {
     const skills = [
       makeSkill({ name: "ui", displayName: "Ui", enabled: false }),

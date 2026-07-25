@@ -33,6 +33,12 @@ import type {
 } from "./project.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
+  ProviderComposerCapabilities,
+  ProviderDiscoveryInput,
+  ProviderListCommandsResult,
+  ProviderListSkillsResult,
+} from "./provider.ts";
+import type {
   ServerConfig,
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
@@ -1237,6 +1243,13 @@ export interface EnvironmentApi {
   };
   review: {
     getDiffPreview: (input: ReviewDiffPreviewInput) => Promise<ReviewDiffPreviewResult>;
+  };
+  provider: {
+    getComposerCapabilities: (
+      input: ProviderDiscoveryInput,
+    ) => Promise<ProviderComposerCapabilities>;
+    listSkills: (input: ProviderDiscoveryInput) => Promise<ProviderListSkillsResult>;
+    listCommands: (input: ProviderDiscoveryInput) => Promise<ProviderListCommandsResult>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

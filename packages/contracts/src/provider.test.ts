@@ -2,6 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  ProviderDiscoveryInput,
+  ProviderListCommandsResult,
+  ProviderListSkillsResult,
   ProviderEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -11,6 +14,9 @@ import {
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
 const decodeProviderSession = Schema.decodeUnknownSync(ProviderSession);
+const decodeProviderDiscoveryInput = Schema.decodeUnknownSync(ProviderDiscoveryInput);
+const decodeProviderListSkillsResult = Schema.decodeUnknownSync(ProviderListSkillsResult);
+const decodeProviderListCommandsResult = Schema.decodeUnknownSync(ProviderListCommandsResult);
 const decodeProviderEvent = Schema.decodeUnknownSync(ProviderEvent);
 
 function getOptionValue(
@@ -19,6 +25,52 @@ function getOptionValue(
 ): unknown {
   return options?.find((option) => option.id === id)?.value;
 }
+
+describe("ProviderDiscoveryInput", () => {
+  it("accepts project-scoped provider discovery", () => {
+    expect(
+      decodeProviderDiscoveryInput({
+        instanceId: "pi-work",
+        cwd: "/workspace/project",
+        threadId: "thread-1",
+        forceReload: true,
+      }),
+    ).toEqual({
+      instanceId: "pi-work",
+      cwd: "/workspace/project",
+      threadId: "thread-1",
+      forceReload: true,
+    });
+  });
+});
+
+describe("provider discovery results", () => {
+  it("preserves valid resources alongside non-fatal diagnostics", () => {
+    expect(
+      decodeProviderListSkillsResult({
+        skills: [{ name: "review", path: "/workspace/review/SKILL.md", enabled: true }],
+        source: "pi.sdk",
+        cached: false,
+        diagnostics: [
+          {
+            severity: "warning",
+            message: "Ignored malformed skill",
+            path: "/workspace/broken/SKILL.md",
+          },
+        ],
+      }),
+    ).toMatchObject({ skills: [{ name: "review" }], diagnostics: [{ severity: "warning" }] });
+
+    expect(
+      decodeProviderListCommandsResult({
+        commands: [{ name: "reload" }],
+        source: "pi.sdk",
+        cached: false,
+        diagnostics: [{ severity: "error", message: "Could not load one prompt" }],
+      }),
+    ).toMatchObject({ commands: [{ name: "reload" }], diagnostics: [{ severity: "error" }] });
+  });
+});
 
 describe("ProviderSessionStartInput", () => {
   it("accepts codex-compatible payloads", () => {
@@ -132,6 +184,16 @@ describe("ProviderSendTurnInput", () => {
     expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
     expect(getOptionValue(parsed.modelSelection?.options, "reasoningEffort")).toBe("xhigh");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
+  });
+
+  it("accepts an explicit mid-turn input mode", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      input: "Run tests after the current response",
+      midTurnInputMode: "followUp",
+    });
+
+    expect(parsed.midTurnInputMode).toBe("followUp");
   });
 
   it("accepts claude modelSelection including ultrathink", () => {

@@ -40,6 +40,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  ProviderDiscoveryError,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchEntriesError,
@@ -77,6 +78,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -293,6 +295,9 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
+  [WS_METHODS.providerGetComposerCapabilities, AuthOrchestrationReadScope],
+  [WS_METHODS.providerListSkills, AuthOrchestrationReadScope],
+  [WS_METHODS.providerListCommands, AuthOrchestrationReadScope],
   [WS_METHODS.serverProbe, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
@@ -419,6 +424,18 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerServiceOption = yield* Effect.serviceOption(ProviderService);
+      const requireProviderService = (
+        operation: string,
+      ): Effect.Effect<ProviderServiceShape, ProviderDiscoveryError> =>
+        Option.isSome(providerServiceOption)
+          ? Effect.succeed(providerServiceOption.value)
+          : Effect.fail(
+              new ProviderDiscoveryError({
+                operation,
+                detail: "Provider discovery is unavailable in this server runtime.",
+              }),
+            );
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1453,6 +1470,90 @@ const makeWsRpcLayer = (
               );
             }),
             { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.providerGetComposerCapabilities]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerGetComposerCapabilities,
+            requireProviderService("provider.getComposerCapabilities").pipe(
+              Effect.flatMap((providerService) => {
+                const operation = providerService.getComposerCapabilities;
+                if (!operation) {
+                  return Effect.fail(
+                    new ProviderDiscoveryError({
+                      operation: "provider.getComposerCapabilities",
+                      detail: "Provider composer discovery is unavailable.",
+                    }),
+                  );
+                }
+                return operation(input).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderDiscoveryError({
+                        operation: "provider.getComposerCapabilities",
+                        detail: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerListSkills]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerListSkills,
+            requireProviderService("provider.listSkills").pipe(
+              Effect.flatMap((providerService) => {
+                const operation = providerService.listSkills;
+                if (!operation) {
+                  return Effect.fail(
+                    new ProviderDiscoveryError({
+                      operation: "provider.listSkills",
+                      detail: "Provider skill discovery is unavailable.",
+                    }),
+                  );
+                }
+                return operation(input).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderDiscoveryError({
+                        operation: "provider.listSkills",
+                        detail: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerListCommands]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerListCommands,
+            requireProviderService("provider.listCommands").pipe(
+              Effect.flatMap((providerService) => {
+                const operation = providerService.listCommands;
+                if (!operation) {
+                  return Effect.fail(
+                    new ProviderDiscoveryError({
+                      operation: "provider.listCommands",
+                      detail: "Provider command discovery is unavailable.",
+                    }),
+                  );
+                }
+                return operation(input).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderDiscoveryError({
+                        operation: "provider.listCommands",
+                        detail: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {

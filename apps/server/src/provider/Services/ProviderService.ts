@@ -13,6 +13,11 @@
  */
 import type {
   ProviderInterruptTurnInput,
+  ProviderMutateInputQueueInput,
+  ProviderDiscoveryInput,
+  ProviderComposerCapabilities,
+  ProviderListSkillsResult,
+  ProviderListCommandsResult,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -59,6 +64,13 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Mutate queued provider input.
+   */
+  readonly mutateInputQueue: (
+    input: ProviderMutateInputQueueInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Respond to a provider approval request.
    */
   readonly respondToRequest: (
@@ -96,6 +108,18 @@ export interface ProviderServiceShape {
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
+
+  readonly getComposerCapabilities?: (
+    input: ProviderDiscoveryInput,
+  ) => Effect.Effect<ProviderComposerCapabilities, ProviderServiceError>;
+
+  readonly listSkills?: (
+    input: ProviderDiscoveryInput,
+  ) => Effect.Effect<ProviderListSkillsResult, ProviderServiceError>;
+
+  readonly listCommands?: (
+    input: ProviderDiscoveryInput,
+  ) => Effect.Effect<ProviderListCommandsResult, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

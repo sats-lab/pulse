@@ -60,6 +60,13 @@ import {
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  ProviderComposerCapabilities,
+  ProviderDiscoveryError,
+  ProviderDiscoveryInput,
+  ProviderListCommandsResult,
+  ProviderListSkillsResult,
+} from "./provider.ts";
+import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
   RelayClientStatusSchema,
@@ -203,6 +210,11 @@ export const WS_METHODS = {
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationFocusHost: "previewAutomation.focusHost",
 
+  // Provider discovery
+  providerGetComposerCapabilities: "provider.getComposerCapabilities",
+  providerListSkills: "provider.listSkills",
+  providerListCommands: "provider.listCommands",
+
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
@@ -249,6 +261,27 @@ export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybi
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+export const WsProviderGetComposerCapabilitiesRpc = Rpc.make(
+  WS_METHODS.providerGetComposerCapabilities,
+  {
+    payload: ProviderDiscoveryInput,
+    success: ProviderComposerCapabilities,
+    error: Schema.Union([ProviderDiscoveryError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsProviderListSkillsRpc = Rpc.make(WS_METHODS.providerListSkills, {
+  payload: ProviderDiscoveryInput,
+  success: ProviderListSkillsResult,
+  error: Schema.Union([ProviderDiscoveryError, EnvironmentAuthorizationError]),
+});
+
+export const WsProviderListCommandsRpc = Rpc.make(WS_METHODS.providerListCommands, {
+  payload: ProviderDiscoveryInput,
+  success: ProviderListCommandsResult,
+  error: Schema.Union([ProviderDiscoveryError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
@@ -699,6 +732,9 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsProviderGetComposerCapabilitiesRpc,
+  WsProviderListSkillsRpc,
+  WsProviderListCommandsRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
