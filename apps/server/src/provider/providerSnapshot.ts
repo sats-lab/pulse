@@ -56,7 +56,10 @@ export interface ServerProviderPresentation {
   readonly displayName: string;
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
+  readonly showRuntimeModeControl?: boolean;
   readonly requiresNewThreadForModelChange?: boolean;
+  readonly deferMidTurnUserMessages?: boolean;
+  readonly inputQueueMutation?: boolean;
 }
 
 export type ServerProviderDraft = Omit<ServerProvider, "instanceId" | "driver">;
@@ -230,8 +233,17 @@ export function buildServerProvider(input: {
     ...(typeof input.presentation.showInteractionModeToggle === "boolean"
       ? { showInteractionModeToggle: input.presentation.showInteractionModeToggle }
       : {}),
+    ...(typeof input.presentation.showRuntimeModeControl === "boolean"
+      ? { showRuntimeModeControl: input.presentation.showRuntimeModeControl }
+      : {}),
     ...(typeof input.presentation.requiresNewThreadForModelChange === "boolean"
       ? { requiresNewThreadForModelChange: input.presentation.requiresNewThreadForModelChange }
+      : {}),
+    ...(typeof input.presentation.deferMidTurnUserMessages === "boolean"
+      ? { deferMidTurnUserMessages: input.presentation.deferMidTurnUserMessages }
+      : {}),
+    ...(typeof input.presentation.inputQueueMutation === "boolean"
+      ? { inputQueueMutation: input.presentation.inputQueueMutation }
       : {}),
     enabled: input.enabled,
     installed: input.probe.installed,

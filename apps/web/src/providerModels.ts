@@ -53,6 +53,27 @@ export function getProviderInteractionModeToggle(
   return getProviderSnapshot(providers, provider)?.showInteractionModeToggle ?? true;
 }
 
+export function getProviderRuntimeModeControl(
+  providers: ReadonlyArray<ServerProvider>,
+  provider: ProviderDriverKind,
+): boolean {
+  return getProviderSnapshot(providers, provider)?.showRuntimeModeControl ?? provider !== "pi";
+}
+
+export function getProviderDeferMidTurnUserMessages(
+  providers: ReadonlyArray<ServerProvider>,
+  provider: ProviderDriverKind,
+): boolean {
+  return getProviderSnapshot(providers, provider)?.deferMidTurnUserMessages ?? false;
+}
+
+export function getProviderInputQueueMutation(
+  providers: ReadonlyArray<ServerProvider>,
+  provider: ProviderDriverKind,
+): boolean {
+  return getProviderSnapshot(providers, provider)?.inputQueueMutation ?? false;
+}
+
 export function isProviderEnabled(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,
