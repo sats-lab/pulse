@@ -9,7 +9,7 @@ import {
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
 
-export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
+export const MAX_VISIBLE_WORK_LOG_ENTRIES = 5;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
 export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
@@ -231,7 +231,11 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
     }
     const { message } = timelineEntry;
     if (message.role === "user") {
-      nullTurnResponseIndex += 1;
+      // A turn-associated user message is steering within the current
+      // response, not the boundary that starts a new unkeyed response.
+      if (!message.turnId) {
+        nullTurnResponseIndex += 1;
+      }
       continue;
     }
     if (message.role !== "assistant") {
@@ -304,12 +308,16 @@ function deriveTurnFolds(input: {
 
   let pendingUserBoundary: string | null = null;
   for (const entry of input.timelineEntries) {
-    if (entry.kind === "message" && entry.message.role === "user") {
+    if (
+      entry.kind === "message" &&
+      entry.message.role === "user" &&
+      entry.message.turnId === null
+    ) {
       pendingUserBoundary = entry.message.createdAt;
       continue;
     }
     const turnId =
-      entry.kind === "message" && entry.message.role === "assistant"
+      entry.kind === "message"
         ? (entry.message.turnId ?? null)
         : entry.kind === "work"
           ? (entry.entry.turnId ?? null)
