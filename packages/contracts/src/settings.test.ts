@@ -79,6 +79,13 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     // Legacy `providers` struct is still hydrated with its per-driver defaults
     // so existing call sites keep working through the migration.
     expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.pi).toEqual({
+      enabled: true,
+      agentDir: "",
+      noTools: "",
+      tools: [],
+      excludeTools: [],
+    });
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -121,6 +128,33 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
         providerInstances: { "1bad": { driver: "codex" } },
       }),
     ).toThrow();
+  });
+});
+
+describe("ServerSettings Pi provider", () => {
+  it("decodes Pi settings and partial patches", () => {
+    const settings = decodeServerSettings({
+      providers: {
+        pi: {
+          agentDir: "  ~/.pi/work  ",
+          noTools: "builtin",
+          tools: ["read", "grep"],
+          excludeTools: ["bash"],
+        },
+      },
+    });
+    expect(settings.providers.pi).toEqual({
+      enabled: true,
+      agentDir: "~/.pi/work",
+      noTools: "builtin",
+      tools: ["read", "grep"],
+      excludeTools: ["bash"],
+    });
+
+    const patch = decodeServerSettingsPatch({
+      providers: { pi: { noTools: "all" } },
+    });
+    expect(patch.providers?.pi).toEqual({ noTools: "all" });
   });
 });
 
