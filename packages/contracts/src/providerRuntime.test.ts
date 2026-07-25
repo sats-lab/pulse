@@ -69,6 +69,35 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
+  it("decodes queued input snapshots and observed user messages", () => {
+    const queued = decodeRuntimeEvent({
+      type: "input.queue.updated",
+      eventId: "event-queue-1",
+      provider: "pi",
+      providerInstanceId: "pi",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        steering: ["Prefer the smaller patch"],
+        followUp: ["Then run the focused test"],
+      },
+    });
+    const observed = decodeRuntimeEvent({
+      type: "user-message.observed",
+      eventId: "event-user-observed-1",
+      provider: "pi",
+      providerInstanceId: "pi",
+      createdAt: "2026-02-28T00:00:01.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: { text: "Prefer the smaller patch" },
+    });
+
+    expect(queued.type).toBe("input.queue.updated");
+    expect(observed.type).toBe("user-message.observed");
+  });
+
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",

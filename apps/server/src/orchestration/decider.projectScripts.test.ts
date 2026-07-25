@@ -19,6 +19,95 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 it.layer(NodeServices.layer)("decider project scripts", (it) => {
+  it.effect("emits input queue mutation requests", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-queue"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-queue"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-queue"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-queue"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-queue"),
+          title: "Queue",
+          workspaceRoot: "/tmp/queue",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }).pipe(
+        Effect.flatMap((model) =>
+          projectEvent(model, {
+            sequence: 2,
+            eventId: asEventId("evt-thread-create-queue"),
+            aggregateKind: "thread",
+            aggregateId: ThreadId.make("thread-queue"),
+            type: "thread.created",
+            occurredAt: now,
+            commandId: CommandId.make("cmd-thread-create-queue"),
+            causationEventId: null,
+            correlationId: CommandId.make("cmd-thread-create-queue"),
+            metadata: {},
+            payload: {
+              threadId: ThreadId.make("thread-queue"),
+              projectId: asProjectId("project-queue"),
+              title: "Queue",
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("pi"),
+                "anthropic/claude-sonnet-4-6",
+              ),
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              branch: null,
+              worktreePath: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          }),
+        ),
+      );
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.input-queue.mutate",
+          commandId: CommandId.make("cmd-queue-remove"),
+          threadId: ThreadId.make("thread-queue"),
+          mutation: {
+            type: "remove",
+            mode: "followUp",
+            index: 1,
+            expectedText: "later",
+          },
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event).toMatchObject({
+        type: "thread.input-queue-mutation-requested",
+        payload: {
+          threadId: "thread-queue",
+          mutation: {
+            type: "remove",
+            mode: "followUp",
+            index: 1,
+            expectedText: "later",
+          },
+          createdAt: now,
+        },
+      });
+    }),
+  );
+
   it.effect("emits empty scripts on project.create", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
@@ -340,6 +429,94 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         ]),
         runtimeMode: "approval-required",
       });
+    }),
+  );
+
+  it.effect("defers a user message until the provider observes queued input", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withProject = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-deferred"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-deferred"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-deferred"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-deferred"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-deferred"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-deferred",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const readModel = yield* projectEvent(withProject, {
+        sequence: 2,
+        eventId: asEventId("evt-thread-create-deferred"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-deferred"),
+        type: "thread.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-thread-create-deferred"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-thread-create-deferred"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-deferred"),
+          projectId: asProjectId("project-deferred"),
+          title: "Thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("pi"),
+            model: "anthropic/claude-sonnet-4-6",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-deferred"),
+          threadId: ThreadId.make("thread-deferred"),
+          message: {
+            messageId: asMessageId("message-user-deferred"),
+            role: "user",
+            text: "queue this",
+            attachments: [],
+          },
+          deferUserMessageUntilProviderEcho: true,
+          midTurnInputMode: "followUp",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual(["thread.turn-start-requested"]);
+      const turnStartEvent = events[0];
+      if (turnStartEvent?.type !== "thread.turn-start-requested") return;
+      expect(turnStartEvent.causationEventId).toBeNull();
+      expect(turnStartEvent.payload.message).toEqual({
+        messageId: asMessageId("message-user-deferred"),
+        role: "user",
+        text: "queue this",
+        attachments: [],
+      });
+      expect(turnStartEvent.payload.midTurnInputMode).toBe("followUp");
     }),
   );
 

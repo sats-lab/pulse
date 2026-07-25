@@ -742,6 +742,27 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("omits input queue snapshots from the work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "queue-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "input.queue.updated",
+        summary: "Input queue updated",
+        tone: "info",
+        payload: { steering: ["change direction"], followUp: ["run tests later"] },
+      }),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Ran command",
+        kind: "tool.completed",
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

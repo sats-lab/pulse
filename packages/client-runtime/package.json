@@ -75,6 +75,10 @@
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
     },
+    "./state/provider-discovery": {
+      "types": "./src/state/providerDiscovery.ts",
+      "default": "./src/state/providerDiscovery.ts"
+    },
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"

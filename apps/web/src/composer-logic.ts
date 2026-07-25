@@ -18,6 +18,15 @@ export function shouldSubmitComposerOnEnter(input: {
   return !input.isMobileViewport && !input.shiftKey;
 }
 
+export function resolvePiMidTurnInputMode(input: {
+  provider: string;
+  isRunning: boolean;
+  altKey: boolean;
+}): "steer" | "followUp" | undefined {
+  if (input.provider !== "pi" || !input.isRunning) return undefined;
+  return input.altKey ? "followUp" : "steer";
+}
+
 const isInlineTokenSegment = (
   segment:
     | { type: "text"; text: string }

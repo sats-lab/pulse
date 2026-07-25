@@ -105,6 +105,7 @@ function createProviderServiceHarness() {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     interruptTurn: () => unsupported(),
+    mutateInputQueue: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
@@ -2615,6 +2616,64 @@ describe("ProviderRuntimeIngestion", () => {
       );
     });
     expect(completionEvents).toHaveLength(1);
+  });
+
+  it("persists queued Pi input as activity without creating user messages", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "input.queue.updated",
+      eventId: asEventId("evt-pi-input-queue"),
+      provider: ProviderDriverKind.make("pi"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pi"),
+      payload: {
+        steering: ["Prefer the smaller patch"],
+        followUp: ["Then run focused tests"],
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "input.queue.updated",
+      ),
+    );
+    const queueActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "input.queue.updated",
+    );
+    expect(queueActivity?.payload).toMatchObject({
+      steering: ["Prefer the smaller patch"],
+      followUp: ["Then run focused tests"],
+    });
+    expect(thread.messages.filter((message) => message.role === "user")).toHaveLength(0);
+  });
+
+  it("creates the user message only after Pi observes delivery", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "user-message.observed",
+      eventId: asEventId("evt-pi-user-observed"),
+      provider: ProviderDriverKind.make("pi"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pi"),
+      payload: { text: "Prefer the smaller patch" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message) => message.role === "user" && message.text === "Prefer the smaller patch",
+      ),
+    );
+    expect(
+      thread.messages.find(
+        (message) => message.role === "user" && message.text === "Prefer the smaller patch",
+      ),
+    ).toMatchObject({ turnId: "turn-pi", streaming: false });
   });
 
   it("maps canonical request events into approval activities with requestKind", async () => {

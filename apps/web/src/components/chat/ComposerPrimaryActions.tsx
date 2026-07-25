@@ -17,6 +17,7 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  allowSendWhileRunning: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -57,6 +58,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  allowSendWhileRunning,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -148,7 +150,34 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
-    return renderStopGenerationButton(false);
+    if (!allowSendWhileRunning) return renderStopGenerationButton(false);
+
+    return (
+      <div className="flex items-center justify-end gap-1.5">
+        {renderStopGenerationButton(false)}
+        <button
+          type="submit"
+          className="flex size-8 items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs shadow-primary/24 transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 hover:bg-primary active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100"
+          {...pointerFocusProps}
+          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+          aria-label={isSendBusy ? "Sending queued message" : "Queue message"}
+        >
+          {isConnecting || isSendBusy ? (
+            <Spinner className="size-3.5" aria-hidden="true" />
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </button>
+      </div>
+    );
   }
 
   if (showPlanFollowUpPrompt) {
