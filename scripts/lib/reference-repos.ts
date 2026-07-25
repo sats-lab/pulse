@@ -27,4 +27,13 @@ export const referenceRepos: ReadonlyArray<ReferenceRepo> = [
     packageVersionPath: ["dependencies", "alchemy"],
     versionTagPrefix: "v",
   },
+  {
+    id: "pi",
+    prefix: ".repos/pi",
+    repository: "https://github.com/earendil-works/pi.git",
+    latestRef: "main",
+    versionSourcePath: "apps/server/package.json",
+    packageVersionPath: ["dependencies", "@earendil-works/pi-coding-agent"],
+    versionTagPrefix: "v",
+  },
 ];
