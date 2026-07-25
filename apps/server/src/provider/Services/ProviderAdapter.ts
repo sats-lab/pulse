@@ -11,8 +11,13 @@ import type {
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
+  ProviderInputQueueMutation,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
+  ProviderDiscoveryInput,
+  ProviderComposerCapabilities,
+  ProviderListSkillsResult,
+  ProviderListCommandsResult,
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
@@ -30,6 +35,7 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  readonly inputQueueMutation?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -67,6 +73,14 @@ export interface ProviderAdapterShape<TError> {
    * Interrupt an active turn.
    */
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+
+  /**
+   * Mutate queued provider input for an active session.
+   */
+  readonly mutateInputQueue?: (
+    threadId: ThreadId,
+    mutation: ProviderInputQueueMutation,
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Respond to an interactive approval request.
@@ -118,6 +132,25 @@ export interface ProviderAdapterShape<TError> {
    * Stop all sessions owned by this adapter.
    */
   readonly stopAll: () => Effect.Effect<void, TError>;
+
+  /**
+   * Read provider-specific composer capabilities.
+   */
+  readonly getComposerCapabilities?: () => Effect.Effect<ProviderComposerCapabilities, TError>;
+
+  /**
+   * Discover skills for a project or active provider session.
+   */
+  readonly listSkills?: (
+    input: ProviderDiscoveryInput,
+  ) => Effect.Effect<ProviderListSkillsResult, TError>;
+
+  /**
+   * Discover provider-native slash commands for a project or active session.
+   */
+  readonly listCommands?: (
+    input: ProviderDiscoveryInput,
+  ) => Effect.Effect<ProviderListCommandsResult, TError>;
 
   /**
    * Canonical runtime event stream emitted by this adapter.

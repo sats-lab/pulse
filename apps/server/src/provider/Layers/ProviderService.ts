@@ -14,6 +14,8 @@ import {
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
+  ProviderMutateInputQueueInput,
+  ProviderDiscoveryInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
@@ -811,6 +813,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const mutateInputQueue: ProviderServiceMethod<"mutateInputQueue"> = Effect.fn("mutateInputQueue")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.mutateInputQueue",
+        schema: ProviderMutateInputQueueInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.mutateInputQueue",
+        allowRecovery: true,
+      });
+      if (!routed.adapter.mutateInputQueue) {
+        return yield* toValidationError(
+          "ProviderService.mutateInputQueue",
+          `Provider '${routed.adapter.provider}' does not support input queue mutation.`,
+        );
+      }
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "mutate-input-queue",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+        "provider.queue_mutation": input.mutation.type,
+      });
+      yield* routed.adapter.mutateInputQueue(routed.threadId, input.mutation);
+    },
+  );
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1024,6 +1054,52 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
+  const getComposerCapabilities: ProviderServiceMethod<"getComposerCapabilities"> = Effect.fn(
+    "getComposerCapabilities",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.getComposerCapabilities",
+      schema: ProviderDiscoveryInput,
+      payload: rawInput,
+    });
+    const instanceInfo = yield* registry.getInstanceInfo(input.instanceId);
+    const adapter = yield* registry.getByInstance(input.instanceId);
+    if (adapter.getComposerCapabilities) return yield* adapter.getComposerCapabilities();
+    return {
+      instanceId: input.instanceId,
+      provider: instanceInfo.driverKind,
+      supportsSkillMentions: false,
+      supportsSkillDiscovery: false,
+      supportsNativeSlashCommandDiscovery: false,
+    };
+  });
+
+  const listSkills: ProviderServiceMethod<"listSkills"> = Effect.fn("listSkills")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.listSkills",
+        schema: ProviderDiscoveryInput,
+        payload: rawInput,
+      });
+      const adapter = yield* registry.getByInstance(input.instanceId);
+      if (!adapter.listSkills) return { skills: [], source: "unsupported", cached: false };
+      return yield* adapter.listSkills(input);
+    },
+  );
+
+  const listCommands: ProviderServiceMethod<"listCommands"> = Effect.fn("listCommands")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.listCommands",
+        schema: ProviderDiscoveryInput,
+        payload: rawInput,
+      });
+      const adapter = yield* registry.getByInstance(input.instanceId);
+      if (!adapter.listCommands) return { commands: [], source: "unsupported", cached: false };
+      return yield* adapter.listCommands(input);
+    },
+  );
+
   const rollbackConversation: ProviderServiceMethod<"rollbackConversation"> = Effect.fn(
     "rollbackConversation",
   )(function* (rawInput) {
@@ -1129,12 +1205,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    mutateInputQueue,
     respondToRequest,
     respondToUserInput,
     stopSession,
     listSessions,
     getCapabilities,
     getInstanceInfo,
+    getComposerCapabilities,
+    listSkills,
+    listCommands,
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

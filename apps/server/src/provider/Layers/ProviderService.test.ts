@@ -140,6 +140,18 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.void,
   );
 
+  const mutateInputQueue = vi.fn(
+    (
+      _threadId: ThreadId,
+      _mutation: {
+        readonly type: "clear-all" | "clear-mode" | "remove";
+        readonly mode?: "steer" | "followUp";
+        readonly index?: number;
+        readonly expectedText?: string;
+      },
+    ): Effect.Effect<void, ProviderAdapterError> => Effect.void,
+  );
+
   const respondToRequest = vi.fn(
     (
       _threadId: ThreadId,
@@ -196,6 +208,21 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.succeed({ threadId, turns: [] }),
   );
 
+  const listSkills = vi.fn(() =>
+    Effect.succeed({
+      skills: [{ name: "review", path: "/workspace/review/SKILL.md", enabled: true }],
+      source: "test",
+      cached: false,
+    }),
+  );
+  const listCommands = vi.fn(() =>
+    Effect.succeed({
+      commands: [{ name: "review", description: "Review changes" }],
+      source: "test",
+      cached: false,
+    }),
+  );
+
   const stopAll = vi.fn(
     (): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
@@ -211,6 +238,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     startSession,
     sendTurn,
     interruptTurn,
+    mutateInputQueue,
     respondToRequest,
     respondToUserInput,
     stopSession,
@@ -218,6 +246,16 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    getComposerCapabilities: () =>
+      Effect.succeed({
+        instanceId: codexInstanceId,
+        provider,
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
+        supportsNativeSlashCommandDiscovery: true,
+      }),
+    listSkills,
+    listCommands,
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -246,6 +284,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     startSession,
     sendTurn,
     interruptTurn,
+    mutateInputQueue,
     respondToRequest,
     respondToUserInput,
     stopSession,
@@ -253,6 +292,8 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    listSkills,
+    listCommands,
     stopAll,
   };
 }
@@ -879,6 +920,19 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* provider.interruptTurn({ threadId: session.threadId });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [[session.threadId, undefined]]);
+
+      yield* provider.mutateInputQueue({
+        threadId: session.threadId,
+        mutation: {
+          type: "remove",
+          mode: "followUp",
+          index: 1,
+          expectedText: "later",
+        },
+      });
+      assert.deepEqual(routing.codex.mutateInputQueue.mock.calls, [
+        [session.threadId, { type: "remove", mode: "followUp", index: 1, expectedText: "later" }],
+      ]);
 
       yield* provider.respondToRequest({
         threadId: session.threadId,
@@ -1843,6 +1897,41 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
           true,
         );
       }),
+  );
+});
+
+const discovery = makeProviderServiceLayer();
+discovery.layer("ProviderServiceLive discovery", (it) => {
+  it.effect("routes composer capabilities, skills, and commands by provider instance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const capabilities = yield* provider.getComposerCapabilities!({
+        instanceId: codexInstanceId,
+        cwd: "/workspace",
+      });
+      const skills = yield* provider.listSkills!({
+        instanceId: codexInstanceId,
+        cwd: "/workspace",
+      });
+      const commands = yield* provider.listCommands!({
+        instanceId: codexInstanceId,
+        cwd: "/workspace",
+      });
+
+      assert.deepEqual(capabilities, {
+        instanceId: codexInstanceId,
+        provider: ProviderDriverKind.make("codex"),
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
+        supportsNativeSlashCommandDiscovery: true,
+      });
+      assert.deepEqual(skills.skills, [
+        { name: "review", path: "/workspace/review/SKILL.md", enabled: true },
+      ]);
+      assert.deepEqual(commands.commands, [{ name: "review", description: "Review changes" }]);
+      assert.equal(discovery.codex.listSkills.mock.calls.length, 1);
+      assert.equal(discovery.codex.listCommands.mock.calls.length, 1);
+    }),
   );
 });
 
