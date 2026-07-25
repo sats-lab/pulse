@@ -213,17 +213,40 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           host: "0.0.0.0",
           port: 4222,
           devUrl: new URL("http://localhost:7331"),
+          serverUrl: new URL("https://server.t3code.testc"),
         });
 
         assert.equal(env.T3CODE_HOME, path.resolve("/tmp/custom-t3"));
         assert.equal(env.T3CODE_PORT, "4222");
-        assert.equal(env.VITE_HTTP_URL, "http://localhost:4222");
-        assert.equal(env.VITE_WS_URL, "ws://localhost:4222");
+        assert.equal(env.VITE_HTTP_URL, "https://server.t3code.testc/");
+        assert.equal(env.VITE_WS_URL, "wss://server.t3code.testc/");
         assert.equal(env.T3CODE_NO_BROWSER, "1");
         assert.equal(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
         assert.equal(env.T3CODE_LOG_WS_EVENTS, "1");
         assert.equal(env.T3CODE_HOST, "0.0.0.0");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
+      }),
+    );
+
+    it.effect("uses a reverse-proxied dev origin for browser HTTP and WebSocket traffic", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: new URL("https://web.t3code.testc"),
+          serverUrl: undefined,
+        });
+
+        assert.equal(env.VITE_HTTP_URL, "https://web.t3code.testc/");
+        assert.equal(env.VITE_WS_URL, "wss://web.t3code.testc/");
       }),
     );
 

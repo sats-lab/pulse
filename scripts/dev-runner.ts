@@ -302,6 +302,7 @@ interface CreateDevRunnerEnvInput {
   readonly host: string | undefined;
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
+  readonly serverUrl?: URL | undefined;
 }
 
 export function createDevRunnerEnv({
@@ -316,6 +317,7 @@ export function createDevRunnerEnv({
   host,
   port,
   devUrl,
+  serverUrl,
 }: CreateDevRunnerEnvInput): Effect.Effect<NodeJS.ProcessEnv, never, Path.Path> {
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
@@ -365,6 +367,13 @@ export function createDevRunnerEnv({
         // single-origin mode. This states the intent positively so Vite can
         // ignore those values rather than infer from their absence.
         output.T3CODE_SINGLE_ORIGIN_DEV = "1";
+      } else if (serverUrl) {
+        const publicHttpUrl = new URL(serverUrl.origin);
+        const publicWsUrl = new URL(publicHttpUrl);
+        publicWsUrl.protocol = publicHttpUrl.protocol === "https:" ? "wss:" : "ws:";
+        output.VITE_HTTP_URL = publicHttpUrl.toString();
+        output.VITE_WS_URL = publicWsUrl.toString();
+        delete output.T3CODE_SINGLE_ORIGIN_DEV;
       } else {
         output.VITE_HTTP_URL = `http://localhost:${serverPort}`;
         output.VITE_WS_URL = `ws://localhost:${serverPort}`;
@@ -617,6 +626,7 @@ interface DevRunnerCliInput {
   readonly host: string | undefined;
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
+  readonly serverUrl: URL | undefined;
   readonly dryRun: boolean;
   readonly share: boolean;
   readonly runArgs: ReadonlyArray<string>;
@@ -659,7 +669,9 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       mode: input.mode,
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
-      hasExplicitDevUrl: input.devUrl !== undefined,
+      // --dev-url describes the public route to the locally started Vite
+      // server; it does not mean that a separate web server already exists.
+      hasExplicitDevUrl: false,
       // A non-loopback bind host decides whether the backend can actually take
       // the port, so it has to be probed alongside loopback.
       checkPortAvailability: makeDefaultCheckPortAvailability(input.host),
@@ -689,6 +701,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       host: input.host,
       port: input.port,
       devUrl: input.devUrl,
+      serverUrl: input.serverUrl,
     });
 
     const selectionSuffix =
@@ -876,6 +889,14 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withSchema(Schema.URLFromString),
     Flag.withDescription(
       "Explicit web dev URL override (forwards to VITE_DEV_SERVER_URL). Ambient VITE_DEV_SERVER_URL values are ignored so a parent dev app cannot redirect the child runner.",
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
+  ),
+  serverUrl: Flag.string("server-url").pipe(
+    Flag.withSchema(Schema.URLFromString),
+    Flag.withDescription(
+      "Public HTTP base URL for the dev backend. Also derives the browser WebSocket URL, while the backend can remain bound to loopback.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),
