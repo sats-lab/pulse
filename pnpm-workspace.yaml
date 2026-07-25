@@ -58,6 +58,10 @@ minimumReleaseAgeExclude:
   - "@clerk/expo@4.0.2"
   - "@clerk/react@6.12.7"
   - "@clerk/shared@4.25.7"
+  - "@earendil-works/pi-agent-core@0.82.0"
+  - "@earendil-works/pi-ai@0.82.0"
+  - "@earendil-works/pi-coding-agent@0.82.0"
+  - "@earendil-works/pi-tui@0.82.0"
 
 overrides:
   "@clerk/backend": "catalog:"

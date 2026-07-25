@@ -18,6 +18,7 @@ import {
 const encoder = new TextEncoder();
 const effectSmol = referenceRepos[0]!;
 const alchemyEffect = referenceRepos[1]!;
+const pi = referenceRepos[2]!;
 
 function mockHandle(
   options: {
@@ -178,6 +179,23 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
     }),
   );
 
+  it.effect("resolves the Pi tag from the server dependency", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const rootDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "sync-reference-repos-pi-version-",
+      });
+      yield* fs.makeDirectory(path.join(rootDir, "apps", "server"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(rootDir, "apps", "server", "package.json"),
+        '{"dependencies":{"@earendil-works/pi-coding-agent":"0.82.0"}}',
+      );
+
+      assert.equal(yield* resolveReferenceRepoRef(pi, rootDir, false), "v0.82.0");
+    }),
+  );
+
   it.effect("plans an add for a missing subtree and a pull for an existing subtree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -251,7 +269,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         assert.fail(`Unexpected error: ${error._tag}`);
       }
       assert.equal(error.repoId, "missing");
-      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect"]);
+      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect", "pi"]);
       assert.ok(!("cause" in error));
     }),
   );
