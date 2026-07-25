@@ -16,12 +16,14 @@ import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
+  ProviderInputQueueMutation,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { ServerProviderSlashCommandInput } from "./server.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -74,6 +76,7 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  midTurnInputMode: Schema.optional(Schema.Literals(["steer", "followUp"])),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -84,11 +87,84 @@ export const ProviderTurnStartResult = Schema.Struct({
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
 
+export const ProviderDiscoveryInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
+  forceReload: Schema.optional(Schema.Boolean),
+});
+export type ProviderDiscoveryInput = typeof ProviderDiscoveryInput.Type;
+
+export const ProviderDiscoveryDiagnostic = Schema.Struct({
+  severity: Schema.Literals(["warning", "error"]),
+  message: TrimmedNonEmptyString,
+  path: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderDiscoveryDiagnostic = typeof ProviderDiscoveryDiagnostic.Type;
+
+export const ProviderListSkillsResult = Schema.Struct({
+  skills: Schema.Array(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      description: Schema.optional(TrimmedNonEmptyString),
+      path: Schema.optional(TrimmedNonEmptyString),
+      enabled: Schema.optional(Schema.Boolean),
+      scope: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  source: TrimmedNonEmptyString,
+  cached: Schema.Boolean,
+  diagnostics: Schema.optional(Schema.Array(ProviderDiscoveryDiagnostic)),
+});
+export type ProviderListSkillsResult = typeof ProviderListSkillsResult.Type;
+
+export const ProviderListCommandsResult = Schema.Struct({
+  commands: Schema.Array(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      description: Schema.optional(TrimmedNonEmptyString),
+      input: Schema.optional(ServerProviderSlashCommandInput),
+    }),
+  ),
+  source: TrimmedNonEmptyString,
+  cached: Schema.Boolean,
+  diagnostics: Schema.optional(Schema.Array(ProviderDiscoveryDiagnostic)),
+});
+export type ProviderListCommandsResult = typeof ProviderListCommandsResult.Type;
+
+export const ProviderComposerCapabilities = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  provider: ProviderDriverKind,
+  supportsSkillMentions: Schema.Boolean,
+  supportsSkillDiscovery: Schema.Boolean,
+  supportsNativeSlashCommandDiscovery: Schema.Boolean,
+});
+export type ProviderComposerCapabilities = typeof ProviderComposerCapabilities.Type;
+
+export class ProviderDiscoveryError extends Schema.TaggedErrorClass<ProviderDiscoveryError>()(
+  "ProviderDiscoveryError",
+  {
+    operation: Schema.String,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Provider discovery failed in ${this.operation}: ${this.detail}`;
+  }
+}
+
 export const ProviderInterruptTurnInput = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
+
+export const ProviderMutateInputQueueInput = Schema.Struct({
+  threadId: ThreadId,
+  mutation: ProviderInputQueueMutation,
+});
+export type ProviderMutateInputQueueInput = typeof ProviderMutateInputQueueInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
