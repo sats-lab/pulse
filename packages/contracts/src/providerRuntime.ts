@@ -26,6 +26,7 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("claude.sdk.permission"),
   Schema.Literal("codex.sdk.thread-event"),
   Schema.Literal("opencode.sdk.event"),
+  Schema.Literal("pi.sdk.event"),
   Schema.Literal("acp.jsonrpc"),
   Schema.TemplateLiteral(["acp.", Schema.String, ".extension"]),
 ]);
@@ -170,6 +171,8 @@ const ProviderRuntimeEventType = Schema.Literals([
   "item.updated",
   "item.completed",
   "content.delta",
+  "user-message.observed",
+  "input.queue.updated",
   "request.opened",
   "request.resolved",
   "user-input.requested",
@@ -220,6 +223,8 @@ const ItemStartedType = Schema.Literal("item.started");
 const ItemUpdatedType = Schema.Literal("item.updated");
 const ItemCompletedType = Schema.Literal("item.completed");
 const ContentDeltaType = Schema.Literal("content.delta");
+const UserMessageObservedType = Schema.Literal("user-message.observed");
+const InputQueueUpdatedType = Schema.Literal("input.queue.updated");
 const RequestOpenedType = Schema.Literal("request.opened");
 const RequestResolvedType = Schema.Literal("request.resolved");
 const UserInputRequestedType = Schema.Literal("user-input.requested");
@@ -417,6 +422,17 @@ const ContentDeltaPayload = Schema.Struct({
   summaryIndex: Schema.optional(Schema.Int),
 });
 export type ContentDeltaPayload = typeof ContentDeltaPayload.Type;
+
+const UserMessageObservedPayload = Schema.Struct({
+  text: Schema.String,
+});
+export type UserMessageObservedPayload = typeof UserMessageObservedPayload.Type;
+
+const InputQueueUpdatedPayload = Schema.Struct({
+  steering: Schema.Array(Schema.String),
+  followUp: Schema.Array(Schema.String),
+});
+export type InputQueueUpdatedPayload = typeof InputQueueUpdatedPayload.Type;
 
 const RequestOpenedPayload = Schema.Struct({
   requestType: CanonicalRequestType,
@@ -791,6 +807,22 @@ const ProviderRuntimeContentDeltaEvent = Schema.Struct({
 });
 export type ProviderRuntimeContentDeltaEvent = typeof ProviderRuntimeContentDeltaEvent.Type;
 
+const ProviderRuntimeUserMessageObservedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: UserMessageObservedType,
+  payload: UserMessageObservedPayload,
+});
+export type ProviderRuntimeUserMessageObservedEvent =
+  typeof ProviderRuntimeUserMessageObservedEvent.Type;
+
+const ProviderRuntimeInputQueueUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: InputQueueUpdatedType,
+  payload: InputQueueUpdatedPayload,
+});
+export type ProviderRuntimeInputQueueUpdatedEvent =
+  typeof ProviderRuntimeInputQueueUpdatedEvent.Type;
+
 const ProviderRuntimeRequestOpenedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: RequestOpenedType,
@@ -989,6 +1021,8 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeItemUpdatedEvent,
   ProviderRuntimeItemCompletedEvent,
   ProviderRuntimeContentDeltaEvent,
+  ProviderRuntimeUserMessageObservedEvent,
+  ProviderRuntimeInputQueueUpdatedEvent,
   ProviderRuntimeRequestOpenedEvent,
   ProviderRuntimeRequestResolvedEvent,
   ProviderRuntimeUserInputRequestedEvent,

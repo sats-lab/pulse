@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
+  type ProviderInputQueueMutation,
   ProviderInstanceId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
@@ -159,7 +160,11 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
-import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
+import {
+  getProviderDeferMidTurnUserMessages,
+  getProviderModelCapabilities,
+  resolveSelectableProvider,
+} from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -1153,6 +1158,9 @@ function ChatViewContent(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  const mutateThreadInputQueue = useAtomCommand(threadEnvironment.mutateInputQueue, {
+    reportFailure: false,
+  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1240,6 +1248,7 @@ function ChatViewContent(props: ChatViewProps) {
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [inputQueueMutationPending, setInputQueueMutationPending] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
@@ -4434,7 +4443,12 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const refreshProviderResourcesAfterReloadRef = useRef<(() => void) | null>(null);
+
+  const onSend = async (
+    e?: { preventDefault: () => void },
+    options?: { midTurnInputMode?: "steer" | "followUp" },
+  ) => {
     e?.preventDefault();
     if (
       !activeThread ||
@@ -4534,6 +4548,13 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const shouldDeferUserMessageUntilProviderEcho =
+      isServerThread &&
+      activeThread.session?.status === "running" &&
+      getProviderDeferMidTurnUserMessages(
+        providerStatuses as ServerProvider[],
+        ctxSelectedProvider,
+      );
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -4564,7 +4585,9 @@ function ChatViewContent(props: ChatViewProps) {
       void dockTransition.catch(() => resolveDockStarted?.());
       await dockStarted;
     }
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    if (!shouldDeferUserMessageUntilProviderEcho) {
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    }
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
@@ -4619,23 +4642,25 @@ function ChatViewContent(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    setTimelineAnchor({
-      threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-      messageId: messageIdForSend,
-    });
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        turnId: null,
-        createdAt: messageCreatedAt,
-        updatedAt: messageCreatedAt,
-        streaming: false,
-      },
-    ]);
+    if (!shouldDeferUserMessageUntilProviderEcho) {
+      setTimelineAnchor({
+        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+        messageId: messageIdForSend,
+      });
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          turnId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+    }
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
       const toastCopy = buildExpiredTerminalContextToastCopy(
@@ -4748,7 +4773,9 @@ function ChatViewContent(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      if (!shouldDeferUserMessageUntilProviderEcho) {
+        beginLocalDispatch({ preparingWorktree: false });
+      }
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -4759,6 +4786,12 @@ function ChatViewContent(props: ChatViewProps) {
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
           },
+          ...(shouldDeferUserMessageUntilProviderEcho
+            ? { deferUserMessageUntilProviderEcho: true }
+            : {}),
+          ...(shouldDeferUserMessageUntilProviderEcho
+            ? { midTurnInputMode: options?.midTurnInputMode ?? "steer" }
+            : {}),
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
           runtimeMode,
@@ -4819,11 +4852,34 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
+    if (turnStartSucceeded && trimmed === "/reload") {
+      window.setTimeout(() => refreshProviderResourcesAfterReloadRef.current?.(), 250);
+    }
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       resetLocalDispatch();
+    }
+  };
+
+  const onMutateInputQueue = async (mutation: ProviderInputQueueMutation) => {
+    if (!activeThread || inputQueueMutationPending) return;
+    setInputQueueMutationPending(true);
+    try {
+      const result = await mutateThreadInputQueue({
+        environmentId,
+        input: { threadId: activeThread.id, mutation },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to update queued messages.",
+        );
+      }
+    } finally {
+      setInputQueueMutationPending(false);
     }
   };
 
@@ -5835,7 +5891,10 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
+                            providerResourcesRefreshRef={refreshProviderResourcesAfterReloadRef}
                             onInterrupt={onInterrupt}
+                            onMutateInputQueue={onMutateInputQueue}
+                            inputQueueMutationPending={inputQueueMutationPending}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={

@@ -740,26 +740,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
-      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.message-sent",
-        payload: {
-          threadId: command.threadId,
-          messageId: command.message.messageId,
-          role: "user",
-          text: command.message.text,
-          attachments: command.message.attachments,
-          turnId: null,
-          streaming: false,
-          createdAt: command.createdAt,
-          updatedAt: command.createdAt,
-        },
-      };
+      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        command.deferUserMessageUntilProviderEcho === true
+          ? null
+          : {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.message-sent",
+              payload: {
+                threadId: command.threadId,
+                messageId: command.message.messageId,
+                role: "user",
+                text: command.message.text,
+                attachments: command.message.attachments,
+                turnId: null,
+                streaming: false,
+                createdAt: command.createdAt,
+                updatedAt: command.createdAt,
+              },
+            };
       const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -767,13 +770,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        causationEventId: userMessageEvent.eventId,
+        ...(userMessageEvent ? { causationEventId: userMessageEvent.eventId } : {}),
         type: "thread.turn-start-requested",
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          ...(command.deferUserMessageUntilProviderEcho === true
+            ? { message: command.message }
+            : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.midTurnInputMode !== undefined
+            ? { midTurnInputMode: command.midTurnInputMode }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
           runtimeMode: targetThread.runtimeMode,
@@ -820,7 +829,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+      return userMessageEvent
+        ? [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent]
+        : [...lifecycleResetEvents, turnStartRequestedEvent];
     }
 
     case "thread.turn.interrupt": {
@@ -840,6 +851,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.input-queue.mutate": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.input-queue-mutation-requested",
+        payload: {
+          threadId: command.threadId,
+          mutation: command.mutation,
           createdAt: command.createdAt,
         },
       };
@@ -989,6 +1022,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, sessionSetEvent];
+    }
+
+    case "thread.message.user.observed": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: "user",
+          text: command.text,
+          turnId: command.turnId ?? null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
     }
 
     case "thread.message.assistant.delta": {

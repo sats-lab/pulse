@@ -51,6 +51,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.input-queue-mutation-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -219,6 +220,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.input-queue.mutate.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -614,6 +616,7 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    readonly midTurnInputMode?: "steer" | "followUp";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -665,6 +668,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.midTurnInputMode !== undefined ? { midTurnInputMode: input.midTurnInputMode } : {}),
     };
   });
 
@@ -781,7 +785,20 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
+    const projectedMessage = thread.messages.find((entry) => entry.id === event.payload.messageId);
+    const message =
+      projectedMessage?.role === "user"
+        ? projectedMessage
+        : event.payload.message
+          ? {
+              id: event.payload.message.messageId,
+              role: "user" as const,
+              text: event.payload.message.text,
+              attachments: event.payload.message.attachments,
+              createdAt: event.payload.createdAt,
+              streaming: false,
+            }
+          : undefined;
     if (!message || message.role !== "user") {
       yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
@@ -795,7 +812,9 @@ const make = Effect.gen(function* () {
     }
 
     const isFirstUserMessageTurn =
-      thread.messages.filter((entry) => entry.role === "user").length === 1;
+      thread.messages.filter((entry) => entry.role === "user").length +
+        (projectedMessage?.role === "user" ? 0 : 1) ===
+      1;
     if (isFirstUserMessageTurn) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
@@ -869,6 +888,9 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      ...(event.payload.midTurnInputMode !== undefined
+        ? { midTurnInputMode: event.payload.midTurnInputMode }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
@@ -906,6 +928,44 @@ const make = Effect.gen(function* () {
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
     yield* providerService.interruptTurn({ threadId: event.payload.threadId });
   });
+
+  const processInputQueueMutationRequested = Effect.fn("processInputQueueMutationRequested")(
+    function* (
+      event: Extract<ProviderIntentEvent, { type: "thread.input-queue-mutation-requested" }>,
+    ) {
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (!thread) return;
+      const hasSession = thread.session && thread.session.status !== "stopped";
+      if (!hasSession) {
+        return yield* appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.input-queue.mutate.failed",
+          summary: "Provider input queue mutation failed",
+          detail: "No active provider session is bound to this thread.",
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        });
+      }
+
+      yield* providerService
+        .mutateInputQueue({
+          threadId: event.payload.threadId,
+          mutation: event.payload.mutation,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.input-queue.mutate.failed",
+              summary: "Provider input queue mutation failed",
+              detail: Cause.pretty(cause),
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            }),
+          ),
+        );
+    },
+  );
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
@@ -1057,6 +1117,9 @@ const make = Effect.gen(function* () {
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
+      case "thread.input-queue-mutation-requested":
+        yield* processInputQueueMutationRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -1090,6 +1153,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.input-queue-mutation-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"

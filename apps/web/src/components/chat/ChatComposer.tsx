@@ -1,10 +1,12 @@
 import type {
   ApprovalRequestId,
   EnvironmentId,
+  ProviderDiscoveryInput,
   ModelSelection,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
+  ProviderInputQueueMutation,
   ResolvedKeybindingsConfig,
   RuntimeMode,
   ScopedThreadRef,
@@ -40,6 +42,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
+  resolvePiMidTurnInputMode,
   shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
@@ -62,6 +65,8 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../../lib/terminalContext";
 import { useComposerPathSearch } from "../../lib/composerPathSearchState";
+import { useEnvironmentQuery } from "../../state/query";
+import { providerDiscoveryEnvironment } from "../../state/providerDiscovery";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
@@ -82,12 +87,21 @@ import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
+  buildProviderDiscoveryState,
+  mergeProviderDiscoveryIntoSnapshot,
+} from "./providerDiscoveryUi";
+import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
+import {
+  deriveLatestQueuedInputSnapshot,
+  QueuedMessagesPopover,
+  type QueuedInputSnapshot,
+} from "./QueuedMessagesPopover";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -167,7 +181,13 @@ import {
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
-import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
+import {
+  getProviderDeferMidTurnUserMessages,
+  getProviderDisplayName,
+  getProviderInputQueueMutation,
+  getProviderInteractionModeToggle,
+  getProviderRuntimeModeControl,
+} from "../../providerModels";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -262,6 +282,7 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
+  showRuntimeModeControl: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
@@ -318,50 +339,54 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
   return (
     <>
-      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+      {props.showRuntimeModeControl ? (
+        <>
+          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
 
-      <Tooltip>
-        <Select
-          value={props.runtimeMode}
-          onValueChange={(value) => props.onRuntimeModeChange(value!)}
-        >
-          <TooltipTrigger
-            render={
-              <SelectTrigger
-                variant="ghost"
-                size="sm"
-                className="font-medium"
-                aria-label="Runtime mode"
-              />
-            }
-          >
-            <RuntimeModeIcon className="size-4" />
-            <SelectValue>{runtimeModeOption.label}</SelectValue>
-          </TooltipTrigger>
-          <SelectPopup alignItemWithTrigger={false}>
-            {runtimeModeOptions.map((mode) => {
-              const option = runtimeModeConfig[mode];
-              const OptionIcon = option.icon;
-              return (
-                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
-                      </span>
-                    </div>
-                  </div>
-                </SelectItem>
-              );
-            })}
-          </SelectPopup>
-        </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
-      </Tooltip>
+          <Tooltip>
+            <Select
+              value={props.runtimeMode}
+              onValueChange={(value) => props.onRuntimeModeChange(value!)}
+            >
+              <TooltipTrigger
+                render={
+                  <SelectTrigger
+                    variant="ghost"
+                    size="sm"
+                    className="font-medium"
+                    aria-label="Runtime mode"
+                  />
+                }
+              >
+                <RuntimeModeIcon className="size-4" />
+                <SelectValue>{runtimeModeOption.label}</SelectValue>
+              </TooltipTrigger>
+              <SelectPopup alignItemWithTrigger={false}>
+                {runtimeModeOptions.map((mode) => {
+                  const option = runtimeModeConfig[mode];
+                  const OptionIcon = option.icon;
+                  return (
+                    <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="grid min-w-0 flex-1 gap-0.5">
+                          <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                            <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                            {option.label}
+                          </span>
+                          <span className="text-muted-foreground text-xs leading-4">
+                            {option.description}
+                          </span>
+                        </div>
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectPopup>
+            </Select>
+            <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+          </Tooltip>
+        </>
+      ) : null}
 
       {interactionModeToggle}
 
@@ -404,6 +429,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeThreadProviderDisplayName: string | null;
   isPreparingWorktree: boolean;
+  queuedInputSnapshot: QueuedInputSnapshot;
   pendingAction: {
     questionIndex: number;
     isLastQuestion: boolean;
@@ -412,6 +438,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  allowSendWhileRunning: boolean;
+  canMutateInputQueue: boolean;
+  inputQueueMutationPending: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -421,10 +450,19 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onMutateInputQueue: (mutation: ProviderInputQueueMutation) => void;
   onImplementPlanInNewThread: () => void;
 }) {
   return (
     <>
+      <QueuedMessagesPopover
+        snapshot={props.queuedInputSnapshot}
+        providerDisplayName={props.activeThreadProviderDisplayName}
+        isRunning={props.isRunning}
+        canMutate={props.canMutateInputQueue}
+        isMutating={props.inputQueueMutationPending}
+        onMutate={props.onMutateInputQueue}
+      />
       {props.activeContextWindow ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
@@ -438,6 +476,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        allowSendWhileRunning={props.allowSendWhileRunning}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -580,8 +619,14 @@ export interface ChatComposerProps {
   composerRef: React.RefObject<ChatComposerHandle | null>;
 
   // Callbacks
-  onSend: (e?: { preventDefault: () => void }) => void;
+  onSend: (
+    e?: { preventDefault: () => void },
+    options?: { midTurnInputMode?: "steer" | "followUp" },
+  ) => void;
+  providerResourcesRefreshRef: React.RefObject<(() => void) | null>;
   onInterrupt: () => void;
+  onMutateInputQueue: (mutation: ProviderInputQueueMutation) => void;
+  inputQueueMutationPending: boolean;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -667,6 +712,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerTerminalContextsRef,
     composerElementContextsRef,
     onSend,
+    providerResourcesRefreshRef,
     onInterrupt,
     onImplementPlanInNewThread,
     onRespondToApproval,
@@ -856,9 +902,54 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
-  const selectedProviderStatus = useMemo(
+  const selectedProviderSnapshot = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
+  );
+  const discoveryInput = useMemo<ProviderDiscoveryInput>(
+    () => ({
+      instanceId: selectedInstanceId,
+      ...(gitCwd ? { cwd: gitCwd } : {}),
+      ...(activeThreadId ? { threadId: activeThreadId } : {}),
+    }),
+    [activeThreadId, gitCwd, selectedInstanceId],
+  );
+  const discoveryTarget = useMemo(
+    () => ({ environmentId, input: discoveryInput }),
+    [discoveryInput, environmentId],
+  );
+  const discoveryEnabled = selectedProviderEntry !== undefined;
+  const discoveredCapabilities = useEnvironmentQuery(
+    discoveryEnabled ? providerDiscoveryEnvironment.composerCapabilities(discoveryTarget) : null,
+  );
+  const discoveredSkills = useEnvironmentQuery(
+    discoveryEnabled ? providerDiscoveryEnvironment.skills(discoveryTarget) : null,
+  );
+  const discoveredCommands = useEnvironmentQuery(
+    discoveryEnabled ? providerDiscoveryEnvironment.commands(discoveryTarget) : null,
+  );
+  const providerDiscoveryState = useMemo(() => {
+    const capabilities = discoveredCapabilities.data;
+    if (!capabilities || !discoveredSkills.data || !discoveredCommands.data) return null;
+    if (!capabilities.supportsSkillDiscovery && !capabilities.supportsNativeSlashCommandDiscovery) {
+      return null;
+    }
+    return buildProviderDiscoveryState({
+      instanceId: capabilities.instanceId,
+      skills: capabilities.supportsSkillDiscovery ? discoveredSkills.data.skills : [],
+      commands: capabilities.supportsNativeSlashCommandDiscovery
+        ? discoveredCommands.data.commands
+        : [],
+    });
+  }, [discoveredCapabilities.data, discoveredCommands.data, discoveredSkills.data]);
+  const selectedProviderStatus = useMemo(
+    () =>
+      mergeProviderDiscoveryIntoSnapshot(
+        selectedProviderSnapshot,
+        providerDiscoveryState,
+        selectedInstanceId,
+      ),
+    [providerDiscoveryState, selectedInstanceId, selectedProviderSnapshot],
   );
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
@@ -896,6 +987,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         providerStatuses,
         selectedProvider,
       ),
+      showRuntimeModeControl: getProviderRuntimeModeControl(providerStatuses, selectedProvider),
+      deferMidTurnUserMessages: getProviderDeferMidTurnUserMessages(
+        providerStatuses,
+        selectedProvider,
+      ),
+      inputQueueMutation: getProviderInputQueueMutation(providerStatuses, selectedProvider),
     }),
     [providerStatuses, selectedProvider],
   );
@@ -929,6 +1026,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
+    [activeThreadActivities],
+  );
+  const queuedInputSnapshot = useMemo(
+    () => deriveLatestQueuedInputSnapshot(activeThreadActivities),
     [activeThreadActivities],
   );
   const activeThreadProviderDisplayName = useMemo(() => {
@@ -1151,7 +1252,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const isComposerMenuLoading =
-    composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
+    (composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending) ||
+    (composerTriggerKind === "skill" &&
+      (discoveredCapabilities.isPending || discoveredSkills.isPending)) ||
+    (composerTriggerKind === "slash-command" &&
+      (discoveredCapabilities.isPending || discoveredCommands.isPending));
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
@@ -1786,13 +1891,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     showPlanFollowUpPrompt,
   ]);
 
+  const refreshProviderResources = useCallback(() => {
+    discoveredCapabilities.refresh();
+    discoveredSkills.refresh();
+    discoveredCommands.refresh();
+  }, [discoveredCapabilities, discoveredCommands, discoveredSkills]);
+  useEffect(() => {
+    providerResourcesRefreshRef.current = refreshProviderResources;
+    return () => {
+      providerResourcesRefreshRef.current = null;
+    };
+  }, [providerResourcesRefreshRef, refreshProviderResources]);
+
   const submitComposer = useCallback(
-    (event?: { preventDefault: () => void }) => {
+    (
+      event?: { preventDefault: () => void },
+      options?: { midTurnInputMode?: "steer" | "followUp" },
+    ) => {
       if (noProviderAvailable) {
         event?.preventDefault();
         return;
       }
-      onSend(event);
+      onSend(event, options);
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
@@ -1855,7 +1975,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       key === "Enter" &&
       shouldSubmitComposerOnEnter({ isMobileViewport, shiftKey: event.shiftKey })
     ) {
-      submitComposer();
+      const midTurnInputMode = resolvePiMidTurnInputMode({
+        provider: selectedProvider,
+        isRunning: phase === "running",
+        altKey: event.altKey,
+      });
+      submitComposer(undefined, midTurnInputMode ? { midTurnInputMode } : undefined);
       return true;
     }
     return false;
@@ -2328,6 +2453,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       compact
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
+                      allowSendWhileRunning={false}
                       showPlanFollowUpPrompt={false}
                       promptHasText={false}
                       isSendBusy={isSendBusy}
@@ -2591,6 +2717,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact
                     pendingAction={pendingPrimaryAction}
                     isRunning={false}
+                    allowSendWhileRunning={false}
                     showPlanFollowUpPrompt={false}
                     promptHasText={false}
                     isSendBusy={isSendBusy}
@@ -2679,6 +2806,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     planSidebarOpen={planSidebarOpen}
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                    showRuntimeModeControl={composerProviderControls.showRuntimeModeControl}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
                     onTogglePlanSidebar={togglePlanSidebar}
@@ -2694,6 +2822,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     ) : null}
                     <ComposerFooterModeControls
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                      showRuntimeModeControl={composerProviderControls.showRuntimeModeControl}
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
                       showPlanToggle={showPlanSidebarToggle}
@@ -2719,8 +2848,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
+                  queuedInputSnapshot={queuedInputSnapshot}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  allowSendWhileRunning={composerProviderControls.deferMidTurnUserMessages}
+                  canMutateInputQueue={composerProviderControls.inputQueueMutation}
+                  inputQueueMutationPending={props.inputQueueMutationPending}
+                  onMutateInputQueue={props.onMutateInputQueue}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}

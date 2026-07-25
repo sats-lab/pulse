@@ -675,6 +675,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  deferUserMessageUntilProviderEcho: Schema.optional(Schema.Boolean),
+  midTurnInputMode: Schema.optional(Schema.Literals(["steer", "followUp"])),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -696,6 +698,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
   }),
+  deferUserMessageUntilProviderEcho: Schema.optional(Schema.Boolean),
+  midTurnInputMode: Schema.optional(Schema.Literals(["steer", "followUp"])),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
@@ -710,6 +714,32 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+export const ProviderInputQueueMode = Schema.Literals(["steer", "followUp"]);
+export type ProviderInputQueueMode = typeof ProviderInputQueueMode.Type;
+
+export const ProviderInputQueueMutation = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("clear-all") }),
+  Schema.Struct({
+    type: Schema.Literal("clear-mode"),
+    mode: ProviderInputQueueMode,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("remove"),
+    mode: ProviderInputQueueMode,
+    index: NonNegativeInt,
+    expectedText: Schema.String,
+  }),
+]);
+export type ProviderInputQueueMutation = typeof ProviderInputQueueMutation.Type;
+
+const ThreadInputQueueMutateCommand = Schema.Struct({
+  type: Schema.Literal("thread.input-queue.mutate"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  mutation: ProviderInputQueueMutation,
   createdAt: IsoDateTime,
 });
 
@@ -763,6 +793,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadInputQueueMutateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -788,6 +819,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadInputQueueMutateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -800,6 +832,16 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  createdAt: IsoDateTime,
+});
+
+const ThreadMessageUserObservedCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.user.observed"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  turnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
 });
 
@@ -862,6 +904,7 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadMessageUserObservedCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -895,6 +938,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.input-queue-mutation-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1035,7 +1079,16 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  message: Schema.optional(
+    Schema.Struct({
+      messageId: MessageId,
+      role: Schema.Literal("user"),
+      text: Schema.String,
+      attachments: Schema.Array(ChatAttachment),
+    }),
+  ),
   modelSelection: Schema.optional(ModelSelection),
+  midTurnInputMode: Schema.optional(Schema.Literals(["steer", "followUp"])),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   interactionMode: ProviderInteractionMode.pipe(
@@ -1048,6 +1101,12 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadInputQueueMutationRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  mutation: ProviderInputQueueMutation,
   createdAt: IsoDateTime,
 });
 
@@ -1213,6 +1272,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.input-queue-mutation-requested"),
+    payload: ThreadInputQueueMutationRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
