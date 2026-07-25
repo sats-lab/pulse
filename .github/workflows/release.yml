@@ -221,7 +221,8 @@ jobs:
     name: Publish CLI to npm
     needs: [preflight, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # npm trusted publishing provenance only accepts GitHub-hosted runners.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

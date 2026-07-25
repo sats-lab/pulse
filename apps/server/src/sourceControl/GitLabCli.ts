@@ -295,7 +295,7 @@ export class GitLabCli extends Context.Service<
       readonly force?: boolean;
     }) => Effect.Effect<void, GitLabCliError>;
   }
->()("t3/sourceControl/GitLabCli") {}
+>()("@sats-lab/pulse/sourceControl/GitLabCli") {}
 
 const RawGitLabRepositoryCloneUrlsSchema = Schema.Struct({
   path_with_namespace: TrimmedNonEmptyString,

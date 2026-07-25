@@ -57,6 +57,7 @@ const devServerInput = {
   host: undefined,
   port: 13_773,
   devUrl: undefined,
+  serverUrl: undefined,
   dryRun: false,
   runArgs: ["--inspect", "secret-token-value"],
 } as const;

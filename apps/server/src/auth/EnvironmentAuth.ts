@@ -489,7 +489,7 @@ export class EnvironmentAuth extends Context.Service<
       baseUrl: string,
     ) => Effect.Effect<string, ServerAuthInternalError>;
   }
->()("t3/auth/EnvironmentAuth") {}
+>()("@sats-lab/pulse/auth/EnvironmentAuth") {}
 
 type BootstrapExchangeResult = {
   readonly response: AuthBrowserSessionResult;
