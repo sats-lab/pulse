@@ -8,6 +8,8 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "./sidebar";
+import { removeLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import * as Schema from "effect/Schema";
 import { resolveSidebarState } from "./sidebarState";
 
 function renderSidebarButton(className?: string) {
@@ -37,6 +39,22 @@ describe("sidebar interactive cursors", () => {
     );
 
     expect(html).toContain('data-sidebar-state="collapsed"');
+  });
+
+  it("restores the persisted desktop collapse state", () => {
+    setLocalStorageItem("sidebar_state", false, Schema.Boolean);
+
+    try {
+      const html = renderToStaticMarkup(
+        <SidebarProvider>
+          <div />
+        </SidebarProvider>,
+      );
+
+      expect(html).toContain('data-sidebar-state="collapsed"');
+    } finally {
+      removeLocalStorageItem("sidebar_state");
+    }
   });
 
   it("keeps the sidebar trigger interactive inside Electron drag regions", () => {
