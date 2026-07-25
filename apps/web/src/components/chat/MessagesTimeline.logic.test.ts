@@ -638,6 +638,210 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.label).toBe("Worked for 12s");
   });
 
+  it("folds turn-associated steering messages with settled turn work", () => {
+    const timelineEntries = [
+      {
+        id: "initial-user-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        message: {
+          id: "initial-user" as never,
+          role: "user" as const,
+          text: "Build it",
+          turnId: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "assistant-commentary-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:05Z",
+        message: {
+          id: "assistant-commentary" as never,
+          role: "assistant" as const,
+          text: "Starting with the first approach.",
+          turnId: "turn-1" as never,
+          createdAt: "2026-01-01T00:00:05Z",
+          updatedAt: "2026-01-01T00:00:06Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "steering-user-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:09Z",
+        message: {
+          id: "steering-user" as never,
+          role: "user" as const,
+          text: "Use the smaller patch instead",
+          turnId: "turn-1" as never,
+          createdAt: "2026-01-01T00:00:09Z",
+          updatedAt: "2026-01-01T00:00:09Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "work-entry-1",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:12Z",
+        entry: {
+          id: "work-1",
+          createdAt: "2026-01-01T00:00:12Z",
+          turnId: "turn-1" as never,
+          label: "Applied patch",
+          tone: "tool" as const,
+        },
+      },
+      {
+        id: "assistant-final-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:20Z",
+        message: {
+          id: "assistant-final" as never,
+          role: "assistant" as const,
+          text: "Done",
+          turnId: "turn-1" as never,
+          createdAt: "2026-01-01T00:00:20Z",
+          updatedAt: "2026-01-01T00:00:22Z",
+          streaming: false,
+        },
+      },
+    ];
+    const baseInput = {
+      timelineEntries,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    };
+
+    const collapsedRows = deriveMessagesTimelineRows(baseInput);
+    expect(collapsedRows.map((row) => row.id)).toEqual([
+      "initial-user-entry",
+      "turn-fold:turn-1",
+      "assistant-final-entry",
+    ]);
+    expect(collapsedRows.find((row) => row.kind === "turn-fold")).toMatchObject({
+      label: "Worked for 22s",
+      expanded: false,
+    });
+
+    const expandedRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      expandedTurnIds: new Set(["turn-1" as never]),
+    });
+    expect(expandedRows.map((row) => row.id)).toEqual([
+      "initial-user-entry",
+      "turn-fold:turn-1",
+      "assistant-commentary-entry",
+      "steering-user-entry",
+      "work-entry-1",
+      "assistant-final-entry",
+    ]);
+  });
+
+  it("does not use a turn-associated steering message as the next turn boundary", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "initial-user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "initial-user" as never,
+            role: "user",
+            text: "First task",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-first-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-first" as never,
+            role: "assistant",
+            text: "Working",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "steering-user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:08Z",
+          message: {
+            id: "steering-user" as never,
+            role: "user",
+            text: "Adjust it",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:08Z",
+            updatedAt: "2026-01-01T00:00:08Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-first-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-first-final" as never,
+            role: "assistant",
+            text: "First done",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            updatedAt: "2026-01-01T00:00:10Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-second-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-second" as never,
+            role: "assistant",
+            text: "Independent turn",
+            turnId: "turn-2" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:24Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-second-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:30Z",
+          entry: {
+            id: "work-second",
+            createdAt: "2026-01-01T00:00:30Z",
+            turnId: "turn-2" as never,
+            label: "Checked result",
+            tone: "tool",
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(
+      rows.find(
+        (row): row is Extract<(typeof rows)[number], { kind: "turn-fold" }> =>
+          row.kind === "turn-fold" && row.turnId === "turn-2",
+      )?.label,
+    ).toBe("Worked for 10s");
+  });
+
   it("uses latest-turn timings and the stopped label for an interrupted latest turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -979,6 +1183,21 @@ describe("deriveMessagesTimelineRows", () => {
           tone: "tool" as const,
         },
       },
+      ...Array.from({ length: 4 }, (_, index) => {
+        const entryNumber = index + 4;
+        return {
+          id: `work-entry-${entryNumber}`,
+          kind: "work" as const,
+          createdAt: `2026-01-01T00:00:0${entryNumber}Z`,
+          entry: {
+            id: `work-${entryNumber}`,
+            createdAt: `2026-01-01T00:00:0${entryNumber}Z`,
+            label: "test",
+            detail: `Running test ${entryNumber}`,
+            tone: "tool" as const,
+          },
+        };
+      }),
     ];
 
     const baseInput = {
@@ -994,7 +1213,14 @@ describe("deriveMessagesTimelineRows", () => {
       expandedWorkGroupIds: new Set(["work-group:work-entry-1"]),
     });
 
-    expect(collapsedRows.map((row) => row.id)).toEqual(["work-3", "work-toggle:work-entry-1"]);
+    expect(collapsedRows.map((row) => row.id)).toEqual([
+      "work-3",
+      "work-4",
+      "work-5",
+      "work-6",
+      "work-7",
+      "work-toggle:work-entry-1",
+    ]);
     expect(collapsedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
       groupId: "work-group:work-entry-1",
       hiddenCount: 2,
@@ -1005,6 +1231,10 @@ describe("deriveMessagesTimelineRows", () => {
       "work-1",
       "work-2",
       "work-3",
+      "work-4",
+      "work-5",
+      "work-6",
+      "work-7",
       "work-toggle:work-entry-1",
     ]);
     expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
