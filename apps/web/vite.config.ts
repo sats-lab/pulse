@@ -15,6 +15,7 @@ Object.assign(process.env, repoEnv);
 const port = Number(process.env.PORT ?? 5733);
 const host = process.env.HOST?.trim() || "localhost";
 const configuredWsUrl = process.env.VITE_WS_URL?.trim();
+const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
 const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
@@ -87,6 +88,23 @@ function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
 }
 
 const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
+
+function resolveHmrTarget(devServerUrl: string | undefined) {
+  if (!devServerUrl) return undefined;
+  try {
+    const url = new URL(devServerUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return {
+      protocol: url.protocol === "https:" ? ("wss" as const) : ("ws" as const),
+      host: url.hostname,
+      clientPort: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+const hmrTarget = resolveHmrTarget(configuredDevServerUrl);
 
 export default defineConfig(() => {
   return {
@@ -163,7 +181,7 @@ export default defineConfig(() => {
             },
           }
         : {}),
-      hmr: {
+      hmr: hmrTarget ?? {
         // Explicit config so Vite's HMR WebSocket connects reliably
         // inside Electron's BrowserWindow. Vite 8 uses console.debug for
         // connection logs — enable "Verbose" in DevTools to see them.
