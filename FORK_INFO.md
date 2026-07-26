@@ -15,6 +15,14 @@ The following downstream commits are maintained on top of upstream `main`:
 | `c86537febaaf` | `feat(web): persist desktop sidebar state locally`                   |
 | `623c15de0abc` | `docs(pi): record provider integration findings`                     |
 | `c43e295a7003` | `ci(release): maintain fork-specific workflows and Pulse publishing` |
+| `63933a37d441` | `fix(pi): stream live context usage during turns`                    |
+| `391d2ba4f7ff` | `feat(web): persist Sidebar V2 Settled shelf state`                  |
+| `77228d9d10ff` | `feat(access): manage remote environment authorization`              |
+| `711678de5e02` | `feat(web): select authorized-client environment`                    |
+| `635492e102ac` | `dev: expose web development servers remotely by default`            |
+| `f4ecee78c7dc` | `build(server): pack an installable Pulse CLI locally`               |
+| `2685ec6ee4c2` | `fix(web): restore composer outline and compact editor height`       |
+| `d678b4ee1edf` | `feat(pi): expose Pulse preview automation as native tools`          |
 
 The release customization preserves upstream workflow definitions under `.github/workflows_upstream/` while activating only CI and the fork-owned release workflow. Releases intentionally omit nightly automation, relay and hosted-web deployment, Discord announcements, WSL preparation, and Windows/Linux builds. They publish macOS artifacts and the existing `@sats-lab/pulse` npm package.
 
