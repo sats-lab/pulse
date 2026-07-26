@@ -4141,6 +4141,98 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes websocket access management operations", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const created = yield* client[WS_METHODS.authCreatePairingCredential]({
+              label: "Remote administrator",
+              scopes: ["orchestration:read", "access:read", "access:write"],
+            });
+            const revokedPairingLink = yield* client[WS_METHODS.authRevokePairingLink]({
+              id: created.id,
+            });
+            const revokedOtherClients = yield* client[WS_METHODS.authRevokeOtherClients]({});
+            return { created, revokedPairingLink, revokedOtherClients };
+          }),
+        ),
+      );
+
+      assert.equal(result.created.label, "Remote administrator");
+      assert.equal(result.revokedPairingLink.revoked, true);
+      assert.equal(result.revokedOtherClients.revokedCount, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("enforces websocket access management read and write scopes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { host: "0.0.0.0" } });
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const issueScopedCredential = Effect.fnUntraced(function* (
+        scope: "access:read" | "access:write",
+      ) {
+        const response = yield* HttpClient.post("/api/auth/pairing-token", {
+          headers: { cookie: ownerCookie },
+          body: yield* HttpBody.json({ scopes: [scope] }),
+        });
+        assert.equal(response.status, 200);
+        const body = (yield* response.json) as { readonly credential: string };
+        return body.credential;
+      });
+
+      const readUrl = yield* getWsServerUrl("/ws", {
+        credential: yield* issueScopedCredential("access:read"),
+      });
+      const readResult = yield* Effect.scoped(
+        withWsRpcClient(readUrl, (client) =>
+          Effect.gen(function* () {
+            const firstEvent = yield* client[WS_METHODS.subscribeAuthAccess]({}).pipe(
+              Stream.runHead,
+            );
+            const writeError = yield* Effect.flip(
+              client[WS_METHODS.authCreatePairingCredential]({
+                scopes: ["orchestration:read"],
+              }),
+            );
+            return { firstEvent, writeError };
+          }),
+        ),
+      );
+      assert.equal(Option.getOrThrow(readResult.firstEvent).type, "snapshot");
+      assert.equal(readResult.writeError._tag, "EnvironmentAuthorizationError");
+      if (readResult.writeError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(readResult.writeError.requiredScope, "access:write");
+      }
+
+      const writeUrl = yield* getWsServerUrl("/ws", {
+        credential: yield* issueScopedCredential("access:write"),
+      });
+      const writeResult = yield* Effect.scoped(
+        withWsRpcClient(writeUrl, (client) =>
+          Effect.gen(function* () {
+            const created = yield* client[WS_METHODS.authCreatePairingCredential]({
+              scopes: ["orchestration:read"],
+            });
+            const readError = yield* Effect.flip(
+              client[WS_METHODS.subscribeAuthAccess]({}).pipe(Stream.runHead),
+            );
+            return { created, readError };
+          }),
+        ),
+      );
+      assert.equal(typeof writeResult.created.credential, "string");
+      assert.equal(writeResult.readError._tag, "EnvironmentAuthorizationError");
+      if (writeResult.readError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(writeResult.readError.requiredScope, "access:read");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("shares one preview automation broker across websocket sessions", () =>
     Effect.scoped(
       Effect.gen(function* () {

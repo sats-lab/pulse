@@ -16,8 +16,10 @@ import {
   AuthReviewWriteScope,
   AuthRelayWriteScope,
   AuthTerminalOperateScope,
+  AuthAccessOperationError,
   AuthAccessReadScope,
   AuthAccessStreamError,
+  AuthAccessWriteScope,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
@@ -312,6 +314,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
+  [WS_METHODS.authCreatePairingCredential, AuthAccessWriteScope],
+  [WS_METHODS.authRevokePairingLink, AuthAccessWriteScope],
+  [WS_METHODS.authRevokeClient, AuthAccessWriteScope],
+  [WS_METHODS.authRevokeOtherClients, AuthAccessWriteScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
@@ -553,6 +559,14 @@ const makeWsRpcLayer = (
               }),
           ),
         );
+      const accessOperationError = (
+        operation: AuthAccessOperationError["operation"],
+        error: Error,
+      ) =>
+        new AuthAccessOperationError({
+          operation,
+          message: error.message,
+        });
 
       const appendSetupScriptActivity = (input: {
         readonly threadId: ThreadId;
@@ -2147,6 +2161,47 @@ const makeWsRpcLayer = (
               return Stream.concat(Stream.fromIterable(snapshotEvents), liveEvents);
             }),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.authCreatePairingCredential]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.authCreatePairingCredential,
+            serverAuth
+              .issuePairingCredential(input)
+              .pipe(
+                Effect.mapError((error) =>
+                  accessOperationError("create-pairing-credential", error),
+                ),
+              ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokePairingLink]: ({ id }) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokePairingLink,
+            serverAuth.revokePairingLink(id).pipe(
+              Effect.map((revoked) => ({ revoked })),
+              Effect.mapError((error) => accessOperationError("revoke-pairing-link", error)),
+            ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokeClient]: ({ sessionId }) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokeClient,
+            serverAuth.revokeClientSession(currentSessionId, sessionId).pipe(
+              Effect.map((revoked) => ({ revoked })),
+              Effect.mapError((error) => accessOperationError("revoke-client-session", error)),
+            ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokeOtherClients]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokeOtherClients,
+            serverAuth.revokeOtherClientSessions(currentSessionId).pipe(
+              Effect.map((revokedCount) => ({ revokedCount })),
+              Effect.mapError((error) =>
+                accessOperationError("revoke-other-client-sessions", error),
+              ),
+            ),
+            { "rpc.aggregate": "auth" },
           ),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
