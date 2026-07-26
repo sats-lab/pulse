@@ -11,9 +11,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  AuthAccessOperationError,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
-  type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
   type DiscoveredLocalServerList,
@@ -512,6 +512,14 @@ const makeWsRpcLayer = (
               }),
           ),
         );
+      const accessOperationError = (
+        operation: AuthAccessOperationError["operation"],
+        error: Error,
+      ) =>
+        new AuthAccessOperationError({
+          operation,
+          message: error.message,
+        });
 
       const appendSetupScriptActivity = (input: {
         readonly threadId: ThreadId;
@@ -2300,6 +2308,47 @@ const makeWsRpcLayer = (
               return Stream.concat(Stream.fromIterable(snapshotEvents), liveEvents);
             }),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.authCreatePairingCredential]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.authCreatePairingCredential,
+            serverAuth
+              .issuePairingCredential(input)
+              .pipe(
+                Effect.mapError((error) =>
+                  accessOperationError("create-pairing-credential", error),
+                ),
+              ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokePairingLink]: ({ id }) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokePairingLink,
+            serverAuth.revokePairingLink(id).pipe(
+              Effect.map((revoked) => ({ revoked })),
+              Effect.mapError((error) => accessOperationError("revoke-pairing-link", error)),
+            ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokeClient]: ({ sessionId }) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokeClient,
+            serverAuth.revokeClientSession(currentSessionId, sessionId).pipe(
+              Effect.map((revoked) => ({ revoked })),
+              Effect.mapError((error) => accessOperationError("revoke-client-session", error)),
+            ),
+            { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.authRevokeOtherClients]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.authRevokeOtherClients,
+            serverAuth.revokeOtherClientSessions(currentSessionId).pipe(
+              Effect.map((revokedCount) => ({ revokedCount })),
+              Effect.mapError((error) =>
+                accessOperationError("revoke-other-client-sessions", error),
+              ),
+            ),
+            { "rpc.aggregate": "auth" },
           ),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
