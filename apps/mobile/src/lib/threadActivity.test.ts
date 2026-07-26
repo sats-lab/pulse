@@ -179,6 +179,38 @@ describe("buildThreadFeed", () => {
     );
   });
 
+  it("omits provider input queue snapshots from the work log", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-input-queue"),
+      projectId: ProjectId.make("project-1"),
+      title: "Queue activity",
+      activities: [
+        makeActivity({
+          id: EventId.make("queue-updated"),
+          kind: "input.queue.updated",
+          summary: "Input queue updated",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: { steering: ["adjust"], followUp: ["test later"] },
+        }),
+        makeActivity({
+          id: EventId.make("tool-completed"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Read files",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          payload: { title: "Read files", itemType: "file_read", status: "completed" },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ id: "tool-completed" }],
+    });
+  });
+
   it("keeps MCP inputs available to expanded mobile work rows", () => {
     const turnId = TurnId.make("turn-mcp");
     const thread = makeThread({
@@ -345,6 +377,77 @@ describe("buildThreadFeed", () => {
     ]);
   });
 
+  it("folds observed steering bubbles with settled turn work", () => {
+    const turnId = TurnId.make("turn-steering");
+    const thread = makeThread({
+      id: ThreadId.make("thread-steering-fold"),
+      projectId: ProjectId.make("project-1"),
+      title: "Steering fold",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:10.000Z",
+        assistantMessageId: MessageId.make("assistant-final"),
+      },
+      messages: [
+        {
+          id: MessageId.make("user-initial"),
+          role: "user",
+          text: "Implement it",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:00.000Z",
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          id: MessageId.make("assistant-commentary"),
+          role: "assistant",
+          text: "Starting",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:02.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("user-steer"),
+          role: "user",
+          text: "Prefer the smaller patch",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:04.000Z",
+          updatedAt: "2026-04-01T00:00:04.000Z",
+        },
+        {
+          id: MessageId.make("assistant-final"),
+          role: "assistant",
+          text: "Done",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:09.000Z",
+          updatedAt: "2026-04-01T00:00:10.000Z",
+        },
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(
+      deriveThreadFeedPresentation(feed, thread.latestTurn, new Set()).map((entry) => entry.id),
+    ).toEqual(["user-initial", "turn-fold:turn-steering", "assistant-final"]);
+    expect(
+      deriveThreadFeedPresentation(feed, thread.latestTurn, new Set([turnId])).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual([
+      "user-initial",
+      "turn-fold:turn-steering",
+      "assistant-commentary",
+      "user-steer",
+      "assistant-final",
+    ]);
+  });
+
   it("measures a steer-superseded turn from its user boundary through trailing work", () => {
     const firstTurnId = TurnId.make("turn-1");
     const secondTurnId = TurnId.make("turn-2");
@@ -506,13 +609,20 @@ describe("buildThreadFeed", () => {
           activity("activity-neutral", "2026-04-01T00:00:02.000Z", "neutral"),
           activity("activity-2", "2026-04-01T00:00:03.000Z"),
           activity("activity-3", "2026-04-01T00:00:04.000Z"),
+          activity("activity-4", "2026-04-01T00:00:05.000Z"),
+          activity("activity-5", "2026-04-01T00:00:06.000Z"),
         ],
       },
     ];
 
     const collapsed = deriveThreadFeedPresentation(feed, null, new Set());
-    expect(collapsed.map((entry) => entry.id)).toEqual(["activity-3", "work-toggle:work-group-1"]);
-    expect(collapsed[1]).toMatchObject({
+    expect(collapsed.map((entry) => entry.id)).toEqual([
+      "activity-3",
+      "activity-4",
+      "activity-5",
+      "work-toggle:work-group-1",
+    ]);
+    expect(collapsed[3]).toMatchObject({
       type: "work-toggle",
       groupId: "work-group-1",
       hiddenCount: 2,
@@ -524,6 +634,8 @@ describe("buildThreadFeed", () => {
       "activity-1",
       "activity-2",
       "activity-3",
+      "activity-4",
+      "activity-5",
       "work-toggle:work-group-1",
     ]);
     expect(expanded.at(-1)).toMatchObject({

@@ -231,6 +231,12 @@ export function useThreadOutboxDrain(): void {
           modelSelection: settings.modelSelection,
           runtimeMode: settings.runtimeMode,
           interactionMode: settings.interactionMode,
+          ...(queuedMessage.midTurnInputMode !== undefined
+            ? { midTurnInputMode: queuedMessage.midTurnInputMode }
+            : {}),
+          ...(queuedMessage.deferUserMessageUntilProviderEcho === true
+            ? { deferUserMessageUntilProviderEcho: true }
+            : {}),
           createdAt: queuedMessage.createdAt,
         },
       });
@@ -315,6 +321,7 @@ export function useThreadOutboxDrain(): void {
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
+        allowWhileBusy: nextQueuedMessage.midTurnInputMode !== undefined,
       });
       if (deliveryAction === "wait") {
         continue;
