@@ -13,6 +13,7 @@ import {
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setSidebarV2SettledShelfExpanded,
   setThreadChangedFilesExpanded,
   type UiState,
 } from "./uiStateStore";
@@ -24,6 +25,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
+    sidebarV2SettledShelfExpanded: true,
     ...overrides,
   };
 }
@@ -144,6 +146,16 @@ describe("uiStateStore pure functions", () => {
       defaultAdvertisedEndpointKey: null,
     });
   });
+
+  it("stores the sidebar v2 settled shelf expansion preference", () => {
+    const collapsed = setSidebarV2SettledShelfExpanded(makeUiState(), false);
+
+    expect(collapsed.sidebarV2SettledShelfExpanded).toBe(false);
+    expect(setSidebarV2SettledShelfExpanded(collapsed, false)).toBe(collapsed);
+    expect(setSidebarV2SettledShelfExpanded(collapsed, true)).toMatchObject({
+      sidebarV2SettledShelfExpanded: true,
+    });
+  });
 });
 
 describe("parsePersistedState", () => {
@@ -159,6 +171,7 @@ describe("parsePersistedState", () => {
         invalid: "not-a-date",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarV2SettledShelfExpanded: false,
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -177,6 +190,7 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarV2SettledShelfExpanded: false,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -184,6 +198,15 @@ describe("parsePersistedState", () => {
         },
       },
     });
+  });
+
+  it("defaults the settled shelf to expanded for old or invalid persisted state", () => {
+    expect(parsePersistedState({}).sidebarV2SettledShelfExpanded).toBe(true);
+    expect(
+      parsePersistedState({
+        sidebarV2SettledShelfExpanded: "collapsed" as unknown as boolean,
+      }).sidebarV2SettledShelfExpanded,
+    ).toBe(true);
   });
 
   it("ignores changed-file expansion values saved with legacy folder semantics", () => {
@@ -280,6 +303,7 @@ describe("uiStateStore persistence", () => {
         },
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarV2SettledShelfExpanded: false,
     });
 
     persistState(state);
@@ -296,6 +320,7 @@ describe("uiStateStore persistence", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarV2SettledShelfExpanded: false,
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {

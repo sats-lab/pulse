@@ -1176,6 +1176,10 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const settledShelfExpanded = useUiStateStore((store) => store.sidebarV2SettledShelfExpanded);
+  const setSettledShelfExpanded = useUiStateStore(
+    (store) => store.setSidebarV2SettledShelfExpanded,
+  );
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -1703,8 +1707,10 @@ export default function SidebarV2() {
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const toggleSettledShelf = useCallback(
+    () => setSettledShelfExpanded(!settledShelfExpanded),
+    [setSettledShelfExpanded, settledShelfExpanded],
+  );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return [];
