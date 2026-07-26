@@ -283,6 +283,22 @@ export class AuthAccessStreamError extends Schema.TaggedErrorClass<AuthAccessStr
   },
 ) {}
 
+export const AuthAccessOperation = Schema.Literals([
+  "create-pairing-credential",
+  "revoke-pairing-link",
+  "revoke-client-session",
+  "revoke-other-client-sessions",
+]);
+export type AuthAccessOperation = typeof AuthAccessOperation.Type;
+
+export class AuthAccessOperationError extends Schema.TaggedErrorClass<AuthAccessOperationError>()(
+  "AuthAccessOperationError",
+  {
+    operation: AuthAccessOperation,
+    message: Schema.String,
+  },
+) {}
+
 export class EnvironmentAuthorizationError extends Schema.TaggedErrorClass<EnvironmentAuthorizationError>()(
   "EnvironmentAuthorizationError",
   {

@@ -9,7 +9,11 @@ import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { subscribe } from "../rpc/client.ts";
-import { createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createAtomCommandScheduler,
+  createEnvironmentRpcCommand,
+  createEnvironmentSubscriptionAtomFamily,
+} from "./runtime.ts";
 
 export const EMPTY_AUTH_ACCESS_SNAPSHOT: AuthAccessSnapshot = {
   pairingLinks: [],
@@ -78,6 +82,11 @@ export function projectAuthAccessSnapshot(
 export function createAuthEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
+  const mutationScheduler = createAtomCommandScheduler();
+  const mutationConcurrency = {
+    mode: "serial" as const,
+    key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
+  };
   return {
     accessChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:auth-access-changes",
@@ -85,6 +94,30 @@ export function createAuthEnvironmentAtoms<R, E>(
         subscribe(WS_METHODS.subscribeAuthAccess, {}).pipe(
           Stream.mapAccum(() => EMPTY_AUTH_ACCESS_SNAPSHOT, projectAuthAccessSnapshot),
         ),
+    }),
+    createPairingCredential: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:auth-create-pairing-credential",
+      tag: WS_METHODS.authCreatePairingCredential,
+      scheduler: mutationScheduler,
+      concurrency: mutationConcurrency,
+    }),
+    revokePairingLink: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:auth-revoke-pairing-link",
+      tag: WS_METHODS.authRevokePairingLink,
+      scheduler: mutationScheduler,
+      concurrency: mutationConcurrency,
+    }),
+    revokeClient: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:auth-revoke-client",
+      tag: WS_METHODS.authRevokeClient,
+      scheduler: mutationScheduler,
+      concurrency: mutationConcurrency,
+    }),
+    revokeOtherClients: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:auth-revoke-other-clients",
+      tag: WS_METHODS.authRevokeOtherClients,
+      scheduler: mutationScheduler,
+      concurrency: mutationConcurrency,
     }),
   };
 }

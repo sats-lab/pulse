@@ -109,7 +109,13 @@ interface PiSessionContext {
   readonly deferredUserMessages: Array<PiDeferredUserMessage>;
   readonly queuedDuringCompaction: Array<PiQueuedDuringCompactionInput>;
   readonly queueSemaphore: Semaphore.Semaphore;
+  readonly usageSemaphore: Semaphore.Semaphore;
   suppressQueueUpdates: boolean;
+  usageThrottleFiber: Fiber.Fiber<void, never> | undefined;
+  usageThrottleGeneration: number;
+  usageUpdatePending: boolean;
+  pendingUsageTurnId: TurnId | undefined;
+  lastEmittedUsage: ThreadTokenUsageSnapshot | undefined;
   activeTurnId: TurnId | undefined;
   activeCompactionTurnId: TurnId | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
@@ -527,6 +533,29 @@ function classifyRuntimeError(
   )
     return "provider_error";
   return "unknown";
+}
+
+function tokenUsageSnapshotsEqual(
+  left: ThreadTokenUsageSnapshot | undefined,
+  right: ThreadTokenUsageSnapshot,
+): boolean {
+  return (
+    left?.usedTokens === right.usedTokens &&
+    left.totalProcessedTokens === right.totalProcessedTokens &&
+    left.maxTokens === right.maxTokens &&
+    left.inputTokens === right.inputTokens &&
+    left.cachedInputTokens === right.cachedInputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.reasoningOutputTokens === right.reasoningOutputTokens &&
+    left.lastUsedTokens === right.lastUsedTokens &&
+    left.lastInputTokens === right.lastInputTokens &&
+    left.lastCachedInputTokens === right.lastCachedInputTokens &&
+    left.lastOutputTokens === right.lastOutputTokens &&
+    left.lastReasoningOutputTokens === right.lastReasoningOutputTokens &&
+    left.toolUses === right.toolUses &&
+    left.durationMs === right.durationMs &&
+    left.compactsAutomatically === right.compactsAutomatically
+  );
 }
 
 function normalizeTokenUsage(
@@ -999,7 +1028,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     };
   });
 
-  const emitUsage = Effect.fn("emitPiTokenUsage")(function* (
+  const emitUsageSnapshot = Effect.fn("emitPiTokenUsageSnapshot")(function* (
     context: PiSessionContext,
     turnId?: TurnId,
   ) {
@@ -1007,7 +1036,9 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       context.piSession.getSessionStats(),
       context.piSession.model?.contextWindow,
     );
-    if (!usage) return;
+    if (!usage) return false;
+    if (tokenUsageSnapshotsEqual(context.lastEmittedUsage, usage)) return false;
+    context.lastEmittedUsage = usage;
     yield* emit({
       ...(yield* buildEventBase({
         threadId: context.session.threadId,
@@ -1016,6 +1047,80 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       type: "thread.token-usage.updated",
       payload: { usage },
     });
+    return true;
+  });
+
+  const emitUsage = Effect.fn("emitPiTokenUsage")(function* (
+    context: PiSessionContext,
+    turnId?: TurnId,
+  ) {
+    return yield* context.usageSemaphore.withPermit(emitUsageSnapshot(context, turnId));
+  });
+
+  const scheduleLiveUsage = Effect.fn("schedulePiLiveTokenUsage")(function* (
+    context: PiSessionContext,
+    turnId: TurnId | undefined,
+  ) {
+    if (yield* Ref.get(context.stopped)) return;
+    yield* context.usageSemaphore.withPermit(
+      Effect.gen(function* () {
+        context.pendingUsageTurnId = turnId;
+        if (context.usageThrottleFiber) {
+          context.usageUpdatePending = true;
+          return;
+        }
+
+        context.usageUpdatePending = false;
+        yield* emitUsageSnapshot(context, turnId);
+        const generation = ++context.usageThrottleGeneration;
+        context.usageThrottleFiber = yield* Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep("1 second");
+            const keepAlive = yield* context.usageSemaphore.withPermit(
+              Effect.gen(function* () {
+                if (context.usageThrottleGeneration !== generation) return false;
+                if (!context.usageUpdatePending) {
+                  context.usageThrottleFiber = undefined;
+                  return false;
+                }
+                context.usageUpdatePending = false;
+                yield* emitUsageSnapshot(context, context.pendingUsageTurnId);
+                return true;
+              }),
+            );
+            if (!keepAlive) return;
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logError("Pi live token usage emission failed", {
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+          Effect.asVoid,
+          Effect.forkIn(context.scope),
+        );
+      }),
+    );
+  });
+
+  const flushUsage = Effect.fn("flushPiTokenUsage")(function* (
+    context: PiSessionContext,
+    turnId?: TurnId,
+  ) {
+    const throttleFiber = yield* context.usageSemaphore.withPermit(
+      Effect.gen(function* () {
+        const fiber = context.usageThrottleFiber;
+        context.usageThrottleGeneration += 1;
+        context.usageThrottleFiber = undefined;
+        context.usageUpdatePending = false;
+        context.pendingUsageTurnId = undefined;
+        yield* emitUsageSnapshot(context, turnId);
+        return fiber;
+      }),
+    );
+    if (throttleFiber) yield* Fiber.interrupt(throttleFiber).pipe(Effect.ignore);
   });
 
   const emitInputQueueUpdate = Effect.fn("emitPiInputQueueUpdate")(function* (
@@ -1045,6 +1150,17 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     if (yield* Ref.getAndSet(context.stopped, true)) return false;
     context.deferredUserMessages.splice(0);
     context.queuedDuringCompaction.splice(0);
+    const usageThrottleFiber = yield* context.usageSemaphore.withPermit(
+      Effect.sync(() => {
+        const fiber = context.usageThrottleFiber;
+        context.usageThrottleGeneration += 1;
+        context.usageThrottleFiber = undefined;
+        context.usageUpdatePending = false;
+        context.pendingUsageTurnId = undefined;
+        return fiber;
+      }),
+    );
+    if (usageThrottleFiber) yield* Fiber.interrupt(usageThrottleFiber).pipe(Effect.ignore);
     if (context.activePromptFiber)
       yield* Fiber.interrupt(context.activePromptFiber).pipe(Effect.ignore);
     if (context.compactionDrainFiber)
@@ -1226,6 +1342,16 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           if (event.type === "queue_update" && !queueUpdateSuppressed) {
             yield* emitInputQueueUpdate(context, context.activeTurnId);
           }
+          if (event.type === "message_update") {
+            yield* scheduleLiveUsage(context, context.activeTurnId);
+          } else if (
+            (event.type === "message_end" && getPiMessageRole(event.message) === "assistant") ||
+            event.type === "tool_execution_end" ||
+            event.type === "compaction_end" ||
+            event.type === "turn_end"
+          ) {
+            yield* flushUsage(context, context.activeTurnId);
+          }
           if (
             event.type === "compaction_end" &&
             context.activeCompactionTurnId === undefined &&
@@ -1284,7 +1410,13 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       deferredUserMessages: [],
       queuedDuringCompaction: [],
       queueSemaphore: yield* Semaphore.make(1),
+      usageSemaphore: yield* Semaphore.make(1),
       suppressQueueUpdates: false,
+      usageThrottleFiber: undefined,
+      usageThrottleGeneration: 0,
+      usageUpdatePending: false,
+      pendingUsageTurnId: undefined,
+      lastEmittedUsage: undefined,
       activeTurnId: undefined,
       activeCompactionTurnId: undefined,
       activePromptFiber: undefined,
@@ -1446,7 +1578,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           : { status: "ready" },
         { clearActiveTurnId: true },
       );
-      yield* emitUsage(context, queuedTurnId);
+      yield* flushUsage(context, queuedTurnId);
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
@@ -1469,6 +1601,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       { status: "error", lastError: detail },
       { clearActiveTurnId: true },
     );
+    yield* flushUsage(context, queuedTurnId);
     yield* emit({
       ...(yield* buildEventBase({ threadId: context.session.threadId, turnId: queuedTurnId })),
       type: "turn.completed",
@@ -1613,6 +1746,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
               { status: "error", lastError: error.detail },
               { clearActiveTurnId: true },
             );
+            yield* flushUsage(context, turnId);
             yield* emit({
               ...(yield* buildEventBase({ threadId: input.threadId, turnId, raw: error })),
               type: "turn.completed",
@@ -1623,6 +1757,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       );
       context.activeTurnId = undefined;
       yield* updateSession(context, { status: "ready" }, { clearActiveTurnId: true });
+      yield* flushUsage(context, turnId);
       yield* emit({
         ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
         type: "turn.completed",
@@ -1691,7 +1826,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             context.activePromptFiber = undefined;
             context.activeTurnFailure = undefined;
             yield* updateSession(context, { status: "ready" }, { clearActiveTurnId: true });
-            yield* emitUsage(context, turnId);
+            yield* flushUsage(context, turnId);
             yield* emit({
               ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
               type: "thread.state.changed",
@@ -1722,6 +1857,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
               { status: "error", lastError: error.detail },
               { clearActiveTurnId: true },
             );
+            yield* flushUsage(context, turnId);
             yield* emit({
               ...(yield* buildEventBase({ threadId: input.threadId, turnId, raw: error })),
               type: "turn.completed",
@@ -1850,7 +1986,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
               : { status: "ready" },
             { clearActiveTurnId: true },
           );
-          yield* emitUsage(context, turnId);
+          yield* flushUsage(context, turnId);
           yield* emit({
             ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
             type: "turn.completed",
@@ -1871,6 +2007,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             { status: "error", lastError: error.detail },
             { clearActiveTurnId: true },
           );
+          yield* flushUsage(context, turnId);
           yield* emit({
             ...(yield* buildEventBase({ threadId: input.threadId, turnId, raw: error })),
             type: "turn.completed",
@@ -2050,6 +2187,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     context.activeTurnFailure = undefined;
     yield* updateSession(context, { status: "ready" }, { clearActiveTurnId: true });
     if (turnId) {
+      yield* flushUsage(context, turnId);
       yield* emit({
         ...(yield* buildEventBase({ threadId, turnId })),
         type: "turn.aborted",

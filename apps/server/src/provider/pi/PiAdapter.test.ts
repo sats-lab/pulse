@@ -14,6 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vite-plus/test";
 import type {
   AgentSession,
@@ -71,6 +72,11 @@ function makeControllablePiSession(input?: { readonly skills?: ReadonlyArray<Ski
   let promptResolve: (() => void) | undefined;
   let compacting = false;
   let streaming = false;
+  let sessionStats = {
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    toolCalls: 0,
+    contextUsage: { tokens: 0, contextWindow: 128_000, percent: 0 },
+  };
   const steering: string[] = [];
   const followUp: string[] = [];
   const calls = {
@@ -117,10 +123,7 @@ function makeControllablePiSession(input?: { readonly skills?: ReadonlyArray<Ski
       calls.reload += 1;
       await resourceLoader.reload();
     },
-    getSessionStats: () => ({
-      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      toolCalls: 0,
-    }),
+    getSessionStats: () => sessionStats,
     setModel: async () => undefined,
     setThinkingLevel: () => undefined,
     compact: async (instructions?: string) => {
@@ -194,6 +197,53 @@ function makeControllablePiSession(input?: { readonly skills?: ReadonlyArray<Ski
   return {
     session,
     calls,
+    setUsage: (input: {
+      readonly contextTokens: number;
+      readonly inputTokens?: number;
+      readonly outputTokens?: number;
+      readonly cacheReadTokens?: number;
+      readonly cacheWriteTokens?: number;
+      readonly toolCalls?: number;
+    }) => {
+      const inputTokens = input.inputTokens ?? 0;
+      const outputTokens = input.outputTokens ?? 0;
+      const cacheRead = input.cacheReadTokens ?? 0;
+      const cacheWrite = input.cacheWriteTokens ?? 0;
+      sessionStats = {
+        tokens: {
+          input: inputTokens,
+          output: outputTokens,
+          cacheRead,
+          cacheWrite,
+          total: inputTokens + outputTokens + cacheRead + cacheWrite,
+        },
+        toolCalls: input.toolCalls ?? 0,
+        contextUsage: {
+          tokens: input.contextTokens,
+          contextWindow: 128_000,
+          percent: (input.contextTokens / 128_000) * 100,
+        },
+      };
+    },
+    emitAssistantUpdate: (delta = "x") =>
+      emit(
+        piEvent({
+          type: "message_update",
+          message: { role: "assistant", content: [{ type: "text", text: delta }] },
+          assistantMessageEvent: { type: "text_delta", delta, contentIndex: 0 },
+        }),
+      ),
+    emitAssistantEnd: (text = "done") =>
+      emit(
+        piEvent({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+          },
+        }),
+      ),
     finishCompaction: () => compactResolve?.(),
     startAutoCompaction: () => {
       compacting = true;
@@ -506,6 +556,187 @@ describe("Pi adapter skill mentions", () => {
       yield* waitUntil(() => controlled.calls.prompt.length === 1);
       expect(controlled.calls.prompt[0]?.text).toBe("/skill:ui-review Please inspect this page");
       controlled.finishPrompt();
+    }).pipe(Effect.scoped, Effect.provide(PI_ADAPTER_TEST_LAYER));
+  });
+});
+
+describe("Pi adapter live context usage", () => {
+  effectIt.effect(
+    "streams bounded usage updates and flushes the final snapshot before turn completion",
+    () => {
+      const controlled = makeControllablePiSession();
+      const model = { provider: "test", id: "model", contextWindow: 128_000 };
+      const modelRuntime = {
+        getModel: () => model,
+        getAvailable: async () => [model],
+        getAuth: async () => ({ auth: { apiKey: "test" }, env: {} }),
+      } as unknown as ModelRuntime;
+      const events: ProviderRuntimeEvent[] = [];
+      const threadId = ThreadId.make("thread-live-context-usage");
+
+      return Effect.gen(function* () {
+        const adapter = yield* makePiAdapter(PI_SETTINGS, {
+          instanceId: INSTANCE_ID,
+          modelRuntime,
+          environment: {},
+          createAgentSession: async (): Promise<CreateAgentSessionResult> => ({
+            session: controlled.session,
+            extensionsResult: {
+              extensions: [],
+              errors: [],
+              runtime: {} as CreateAgentSessionResult["extensionsResult"]["runtime"],
+            },
+          }),
+        });
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("pi"),
+          providerInstanceId: INSTANCE_ID,
+          threadId,
+          runtimeMode: "full-access",
+          modelSelection: { instanceId: INSTANCE_ID, model: "test/model" },
+        });
+        yield* waitUntil(() => events.some((event) => event.type === "thread.token-usage.updated"));
+        events.splice(0);
+
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "Stream a response",
+          attachments: [],
+        });
+        yield* waitUntil(() => controlled.calls.prompt.length === 1);
+
+        controlled.setUsage({ contextTokens: 100, inputTokens: 80, outputTokens: 20 });
+        controlled.emitAssistantUpdate("a");
+        yield* waitUntil(() =>
+          events.some(
+            (event) =>
+              event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 100,
+          ),
+        );
+
+        controlled.setUsage({ contextTokens: 120, inputTokens: 90, outputTokens: 30 });
+        controlled.emitAssistantUpdate("b");
+        controlled.emitAssistantUpdate("c");
+        controlled.emitAssistantUpdate("d");
+        yield* Effect.yieldNow;
+        expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(
+          1,
+        );
+
+        yield* TestClock.adjust("1 second");
+        yield* waitUntil(() =>
+          events.some(
+            (event) =>
+              event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 120,
+          ),
+        );
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 120,
+          ),
+        ).toHaveLength(1);
+
+        controlled.emitAssistantUpdate("same snapshot");
+        yield* TestClock.adjust("1 second");
+        yield* Effect.yieldNow;
+        expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(
+          2,
+        );
+
+        controlled.setUsage({ contextTokens: 160, inputTokens: 110, outputTokens: 50 });
+        controlled.emitAssistantUpdate("final delta");
+        controlled.emitAssistantEnd();
+        controlled.finishPrompt();
+        yield* waitUntil(() => events.some((event) => event.type === "turn.completed"));
+
+        const finalUsageIndex = events.findIndex(
+          (event) =>
+            event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 160,
+        );
+        const turnCompletedIndex = events.findIndex(
+          (event) => event.type === "turn.completed" && event.turnId === turn.turnId,
+        );
+        expect(finalUsageIndex).toBeGreaterThan(-1);
+        expect(turnCompletedIndex).toBeGreaterThan(finalUsageIndex);
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 160,
+          ),
+        ).toHaveLength(1);
+        yield* Fiber.interrupt(eventsFiber);
+      }).pipe(Effect.scoped, Effect.provide(PI_ADAPTER_TEST_LAYER));
+    },
+  );
+
+  effectIt.effect("cancels a pending usage update when the session stops", () => {
+    const controlled = makeControllablePiSession();
+    const model = { provider: "test", id: "model", contextWindow: 128_000 };
+    const modelRuntime = {
+      getModel: () => model,
+      getAvailable: async () => [model],
+      getAuth: async () => ({ auth: { apiKey: "test" }, env: {} }),
+    } as unknown as ModelRuntime;
+    const events: ProviderRuntimeEvent[] = [];
+    const threadId = ThreadId.make("thread-stopped-context-usage");
+
+    return Effect.gen(function* () {
+      const adapter = yield* makePiAdapter(PI_SETTINGS, {
+        instanceId: INSTANCE_ID,
+        modelRuntime,
+        environment: {},
+        createAgentSession: async (): Promise<CreateAgentSessionResult> => ({
+          session: controlled.session,
+          extensionsResult: {
+            extensions: [],
+            errors: [],
+            runtime: {} as CreateAgentSessionResult["extensionsResult"]["runtime"],
+          },
+        }),
+      });
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("pi"),
+        providerInstanceId: INSTANCE_ID,
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: INSTANCE_ID, model: "test/model" },
+      });
+      yield* waitUntil(() => events.some((event) => event.type === "thread.token-usage.updated"));
+      events.splice(0);
+      yield* adapter.sendTurn({ threadId, input: "Stream a response", attachments: [] });
+      yield* waitUntil(() => controlled.calls.prompt.length === 1);
+
+      controlled.setUsage({ contextTokens: 100 });
+      controlled.emitAssistantUpdate("first");
+      yield* waitUntil(() =>
+        events.some(
+          (event) =>
+            event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 100,
+        ),
+      );
+      controlled.setUsage({ contextTokens: 120 });
+      controlled.emitAssistantUpdate("pending");
+      yield* adapter.stopSession(threadId);
+      yield* waitUntil(() => events.some((event) => event.type === "session.exited"));
+
+      yield* TestClock.adjust("1 second");
+      yield* Effect.yieldNow;
+      expect(
+        events.some(
+          (event) =>
+            event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 120,
+        ),
+      ).toBe(false);
+      yield* Fiber.interrupt(eventsFiber);
     }).pipe(Effect.scoped, Effect.provide(PI_ADAPTER_TEST_LAYER));
   });
 });
