@@ -156,6 +156,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(env.T3CODE_HOME, undefined);
         assert.equal(env.T3CODE_NO_BROWSER, "1");
+        assert.equal(env.T3CODE_HOST, "0.0.0.0");
       }),
     );
 
@@ -794,6 +795,20 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    it.effect("keeps an explicit dev backend offset while finding a free web port", () =>
+      Effect.gen(function* () {
+        const offsets = yield* resolveModePortOffsets({
+          mode: "dev",
+          startOffset: 0,
+          hasExplicitServerPort: true,
+          hasExplicitDevUrl: false,
+          checkPortAvailability: (port) => Effect.succeed(port !== 5_733),
+        });
+
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1 });
+      }),
+    );
+
     it.effect("shifts only server offset for dev:server", () =>
       Effect.gen(function* () {
         const taken = new Set([13773]);
@@ -839,6 +854,51 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("runDevRunnerWithInput", () => {
+    it.effect("keeps the routed dev backend on the requested port when restarting", () => {
+      const spawns: Array<{
+        readonly command: string;
+        readonly args: ReadonlyArray<string>;
+        readonly env: NodeJS.ProcessEnv;
+      }> = [];
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          if (command._tag !== "StandardCommand") {
+            return Effect.die("Unexpected piped dev-runner command");
+          }
+          spawns.push({
+            command: command.command,
+            args: command.args,
+            env: command.options.env ?? {},
+          });
+          return Effect.succeed(mockProcess(0));
+        }),
+      );
+      const unavailableBasePortLayer = Layer.succeed(NetService.NetService, {
+        canListenOnHost: (port: number) => Effect.succeed(port !== 13_773),
+        isPortAvailableOnLoopback: () => Effect.succeed(true),
+        reserveLoopbackPort: () => Effect.succeed(49_152),
+        findAvailablePort: (port: number) => Effect.succeed(port),
+      });
+
+      return Effect.gen(function* () {
+        yield* runDevRunnerWithInput({
+          ...devServerInput,
+          mode: "dev",
+          port: undefined,
+          devUrl: new URL("https://web.t3code.testc"),
+          runArgs: [],
+        }).pipe(
+          Effect.provide(Layer.mergeAll(emptyConfigLayer, unavailableBasePortLayer, spawnerLayer)),
+          Effect.provideService(HostProcessPlatform, "linux"),
+        );
+
+        assert.equal(spawns.length, 1);
+        assert.equal(spawns[0]?.env.T3CODE_PORT, "13773");
+        assert.equal(spawns[0]?.env.T3CODE_HOST, "0.0.0.0");
+      });
+    });
+
     it.effect("preserves invalid configuration as the exact cause", () =>
       Effect.gen(function* () {
         const error = yield* runDevRunnerWithInput({ ...devServerInput, dryRun: true }).pipe(
