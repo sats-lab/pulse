@@ -27,6 +27,7 @@ const BASE_WEB_PORT = 5733;
 const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
+const WEB_DEV_DEFAULT_HOST = "0.0.0.0";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
 
 export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
@@ -295,8 +296,8 @@ export function createDevRunnerEnv({
       delete output.T3CODE_HOST;
     }
 
-    if (!isDesktopMode && host !== undefined) {
-      output.T3CODE_HOST = host;
+    if (!isDesktopMode) {
+      output.T3CODE_HOST = host ?? WEB_DEV_DEFAULT_HOST;
     }
 
     if (!isDesktopMode) {
@@ -450,6 +451,16 @@ export function resolveModePortOffsets<R = NetService.NetService>({
     const checkPort = (checkPortAvailability ??
       defaultCheckPortAvailability) as PortAvailabilityCheck<R>;
 
+    if (mode === "dev" && hasExplicitServerPort) {
+      const webOffset = yield* findFirstAvailableOffset({
+        startOffset,
+        requireServerPort: false,
+        requireWebPort: true,
+        checkPortAvailability: checkPort,
+      });
+      return { serverOffset: startOffset, webOffset };
+    }
+
     if (mode === "dev:web") {
       if (hasExplicitDevUrl) {
         return { serverOffset: startOffset, webOffset: startOffset };
@@ -520,7 +531,11 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     const { serverOffset, webOffset } = yield* resolveModePortOffsets({
       mode: input.mode,
       startOffset: offset,
-      hasExplicitServerPort: input.port !== undefined,
+      // A public dev URL identifies one stable routed environment. Reusing the
+      // requested backend port lets a restart replace that environment instead
+      // of silently selecting a new backend while the proxy still targets the
+      // old one. Explicit --port keeps the same stable-port behavior.
+      hasExplicitServerPort: input.port !== undefined || input.devUrl !== undefined,
       // --dev-url describes the public route to the locally started Vite
       // server; it does not mean that a separate web server already exists.
       hasExplicitDevUrl: false,
@@ -549,7 +564,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_T3_HOME);
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverHost=${String(env.T3CODE_HOST ?? "default")} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
     );
 
     if (input.dryRun) {
