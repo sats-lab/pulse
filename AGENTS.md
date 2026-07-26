@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## User-Specific Local Builds
+
+When the repository owner requests a local desktop installer or installable server CLI package, read [`LOCAL_BUILD.md`](LOCAL_BUILD.md). Keep ad hoc artifacts under ignored `release/`, prefer an appropriate local build host over paid cloud packaging, and do not publish, sign, notarize, or create a release unless explicitly requested.
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
