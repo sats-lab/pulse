@@ -6,7 +6,7 @@ You can think of T3 Code as an open source "bring-your-own-subscription" alterna
 
 ## User-Specific Local Builds
 
-When the repository owner requests a local desktop installer or installable server CLI package, read [`LOCAL_BUILD.md`](LOCAL_BUILD.md). Keep ad hoc artifacts under ignored `release/`, prefer an appropriate local build host over paid cloud packaging, and do not publish, sign, notarize, or create a release unless explicitly requested.
+When the repository owner requests a local desktop installer or installable server CLI package, read [`LOCAL_BUILD.md`](LOCAL_BUILD.md). For a local Personal Team iOS Release or development-client build, also read [`LOCAL_BUILD_MOBILE.md`](LOCAL_BUILD_MOBILE.md). For local mobile Metro, read [`LOCAL_METRO.md`](LOCAL_METRO.md). Keep ad hoc artifacts under ignored `release/`, prefer an appropriate local build host over paid cloud packaging, and do not publish, notarize, upload, or create a release unless explicitly requested. Local iOS device installation may be signed with the owner's Personal Team only when requested; never request or expose keychain credentials.
 
 ## What makes T3 Code special?
 
