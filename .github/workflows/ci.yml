@@ -82,44 +82,6 @@ jobs:
       - name: Lint mobile native sources
         run: vp run lint:mobile
 
-  macos_arm64_test_artifact:
-    name: macOS arm64 Test Artifact
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'tmp/macos-arm64-access-management' }}
-    runs-on: blacksmith-12vcpu-macos-26
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Build unsigned macOS arm64 DMG
-        run: |
-          vp run dist:desktop:artifact \
-            --platform mac \
-            --target dmg \
-            --arch arm64 \
-            --build-version "0.0.32-pr.${{ github.run_number }}" \
-            --verbose
-
-      - name: Upload macOS arm64 artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: t3code-macos-arm64-pr-${{ github.event.pull_request.number }}
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.blockmap
-            release/*.yml
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
   release_smoke:
     name: Release Smoke
     runs-on: blacksmith-8vcpu-ubuntu-2404
