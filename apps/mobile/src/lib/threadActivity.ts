@@ -56,7 +56,7 @@ export interface ThreadFeedActivity {
   readonly status: "success" | "failure" | "neutral" | null;
 }
 
-const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
+const MAX_VISIBLE_WORK_LOG_ENTRIES = 3;
 
 type WorkLogToolLifecycleStatus = "inProgress" | "completed" | "failed" | "declined" | "stopped";
 
@@ -306,6 +306,7 @@ function deriveWorkLogEntries(
     if (activity.kind === "task.updated" && !isTerminalBypassUpdate(activity)) continue;
     if (activity.kind === "tool.progress") continue;
     if (activity.kind === "context-window.updated") continue;
+    if (activity.kind === "input.queue.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
@@ -1140,12 +1141,16 @@ function deriveThreadFeedTurnFolds(
   const groupsByTurnId = new Map<TurnId, TurnGroup>();
   let pendingUserBoundary: string | null = null;
   for (const entry of feed) {
-    if (entry.type === "message" && entry.message.role === "user") {
+    if (
+      entry.type === "message" &&
+      entry.message.role === "user" &&
+      entry.message.turnId === null
+    ) {
       pendingUserBoundary = entry.message.createdAt;
       continue;
     }
     const turnId =
-      entry.type === "message" && entry.message.role === "assistant"
+      entry.type === "message"
         ? entry.message.turnId
         : entry.type === "activity-group"
           ? entry.turnId

@@ -21,7 +21,7 @@ import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 3;
+const THREAD_OUTBOX_SCHEMA_VERSION = 4;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -37,7 +37,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
@@ -47,6 +47,8 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  midTurnInputMode: Schema.optional(Schema.Literals(["steer", "followUp"])),
+  deferUserMessageUntilProviderEcho: Schema.optional(Schema.Boolean),
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
@@ -76,6 +78,8 @@ export interface QueuedThreadMessage {
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
+  readonly midTurnInputMode?: "steer" | "followUp";
+  readonly deferUserMessageUntilProviderEcho?: boolean;
   readonly creation?: QueuedThreadCreation;
   readonly createdAt: string;
 }
@@ -154,6 +158,7 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
   readonly threadBusy: boolean;
+  readonly allowWhileBusy?: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
@@ -169,7 +174,9 @@ export function resolveThreadOutboxDeliveryAction(input: {
   if (!input.threadExists) {
     return input.shellStatus === "live" ? "remove" : "wait";
   }
-  return input.environmentConnected && !input.threadBusy ? "send" : "wait";
+  return input.environmentConnected && (!input.threadBusy || input.allowWhileBusy === true)
+    ? "send"
+    : "wait";
 }
 
 /**

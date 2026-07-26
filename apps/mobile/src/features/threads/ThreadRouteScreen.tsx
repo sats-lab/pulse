@@ -6,8 +6,15 @@ import {
   type StaticScreenProps,
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import { AsyncResult } from "effect/unstable/reactivity";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ProjectScript,
+  type ProviderInputQueueMutation,
+} from "@t3tools/contracts";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
@@ -62,6 +69,7 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
+import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
 import { threadEnvironment } from "../../state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -214,6 +222,10 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const mutateThreadInputQueue = useAtomCommand(threadEnvironment.mutateInputQueue, {
+    reportFailure: false,
+  });
+  const [inputQueueMutationPending, setInputQueueMutationPending] = useState(false);
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -496,6 +508,26 @@ function ThreadRouteContent(
       },
     });
   }, [interruptThreadTurn, selectedThread]);
+
+  const handleMutateInputQueue = useCallback(
+    (mutation: ProviderInputQueueMutation) => {
+      if (!selectedThread || inputQueueMutationPending) return;
+      setInputQueueMutationPending(true);
+      void mutateThreadInputQueue({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id, mutation },
+      })
+        .then((result) => {
+          if (!AsyncResult.isFailure(result) || Cause.hasInterruptsOnly(result.cause)) return;
+          const error = Cause.squash(result.cause);
+          setPendingConnectionError(
+            error instanceof Error ? error.message : "Failed to update queued messages.",
+          );
+        })
+        .finally(() => setInputQueueMutationPending(false));
+    },
+    [inputQueueMutationPending, mutateThreadInputQueue, selectedThread],
+  );
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -790,6 +822,9 @@ function ThreadRouteContent(
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
+          providerInputQueue={composer.providerInputQueue}
+          contextWindow={composer.contextWindow}
+          inputQueueMutationPending={inputQueueMutationPending}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
@@ -800,6 +835,7 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onMutateInputQueue={handleMutateInputQueue}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}

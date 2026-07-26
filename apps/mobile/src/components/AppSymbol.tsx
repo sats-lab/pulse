@@ -17,6 +17,7 @@ import {
   IconChartBar,
   IconCheck,
   IconChevronDown,
+  IconClock,
   IconCode,
   IconChevronLeft,
   IconChevronRight,

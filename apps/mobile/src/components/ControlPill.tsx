@@ -21,7 +21,10 @@ export function ControlPill(props: {
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly onPress?: () => void;
-  readonly variant?: "circle" | "pill" | "primary" | "danger";
+  readonly onPressIn?: () => void;
+  readonly onPressOut?: () => void;
+  readonly onLongPress?: () => void;
+  readonly variant?: "circle" | "pill" | "primary" | "blue" | "danger";
   readonly disabled?: boolean;
 }) {
   const variant = props.variant ?? "circle";
@@ -31,7 +34,7 @@ export function ControlPill(props: {
   const primaryFg = useThemeColor("--color-primary-foreground");
   const dangerFg = useThemeColor("--color-danger-foreground");
   const iconTintColor =
-    variant === "primary"
+    variant === "primary" || variant === "blue"
       ? props.disabled
         ? iconSubtle
         : primaryFg
@@ -40,7 +43,10 @@ export function ControlPill(props: {
         : iconColor;
 
   const isCircle =
-    variant === "circle" || variant === "danger" || (variant === "primary" && !props.label);
+    variant === "circle" ||
+    variant === "blue" ||
+    variant === "danger" ||
+    (variant === "primary" && !props.label);
   const containerClassName = cn(
     isCircle
       ? "h-11 w-11 items-center justify-center rounded-full"
@@ -51,9 +57,13 @@ export function ControlPill(props: {
       ? props.disabled
         ? "bg-subtle-strong"
         : "bg-primary"
-      : variant === "danger"
-        ? "bg-danger"
-        : "bg-subtle",
+      : variant === "blue"
+        ? props.disabled
+          ? "bg-subtle-strong"
+          : "bg-blue-500"
+        : variant === "danger"
+          ? "bg-danger"
+          : "bg-subtle",
   );
   const labelClassName = cn(
     "text-center text-xs font-t3-bold",
@@ -69,6 +79,9 @@ export function ControlPill(props: {
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
       onPress={props.onPress}
+      onPressIn={props.onPressIn}
+      onPressOut={props.onPressOut}
+      onLongPress={props.onLongPress}
       disabled={props.disabled}
       className={containerClassName}
     >

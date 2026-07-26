@@ -22,6 +22,10 @@ import {
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed } from "../lib/threadActivity";
+import {
+  deriveLatestContextWindowSnapshot,
+  deriveLatestProviderInputQueue,
+} from "../lib/providerRuntimePresentation";
 import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
@@ -99,6 +103,14 @@ export function useThreadComposerState() {
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
+  const providerInputQueue = useMemo(
+    () => deriveLatestProviderInputQueue(selectedThreadDetail?.activities),
+    [selectedThreadDetail?.activities],
+  );
+  const contextWindow = useMemo(
+    () => deriveLatestContextWindowSnapshot(selectedThreadDetail?.activities),
+    [selectedThreadDetail?.activities],
+  );
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
@@ -133,53 +145,58 @@ export function useThreadComposerState() {
     !!selectedThread &&
     (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
 
-  const onSendMessage = useCallback(async () => {
-    if (!selectedThreadShell) {
-      return null;
-    }
+  const onSendMessage = useCallback(
+    async (options?: {
+      readonly midTurnInputMode?: "steer" | "followUp";
+      readonly deferUserMessageUntilProviderEcho?: boolean;
+    }) => {
+      if (!selectedThreadShell) {
+        return null;
+      }
 
-    const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
-    const draft = getComposerDraftSnapshot(threadKey);
-    const thread = selectedThreadDetail ?? selectedThreadShell;
-    const text = draft.text.trim();
-    const attachments = draft.attachments;
-    if (text.length === 0 && attachments.length === 0) {
-      return null;
-    }
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const draft = getComposerDraftSnapshot(threadKey);
+      const thread = selectedThreadDetail ?? selectedThreadShell;
+      const text = draft.text.trim();
+      const attachments = draft.attachments;
+      if (text.length === 0 && attachments.length === 0) {
+        return null;
+      }
 
-    const metadata = makeQueuedMessageMetadata();
-    const messageId = MessageId.make(metadata.messageId);
-    // Enqueue publishes the queued atom synchronously (the durable write
-    // happens behind it), so clearing the draft here gives send feedback on
-    // the tap frame instead of after file I/O. If the write fails the message
-    // is rolled out of the queue and the content is merged back into the
-    // draft, preserving anything typed since.
-    const enqueuePromise = enqueueThreadOutboxMessage({
-      environmentId: selectedThreadShell.environmentId,
-      threadId: selectedThreadShell.id,
-      messageId,
-      commandId: CommandId.make(metadata.commandId),
-      text,
-      attachments,
-      modelSelection: draft.modelSelection ?? thread.modelSelection,
-      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: draft.interactionMode ?? thread.interactionMode,
-      createdAt: metadata.createdAt,
-    });
-    clearComposerDraftContent(threadKey);
-    enqueuePromise.catch((error: unknown) => {
-      // Restore text via merge (idempotent) but attachments via the uncapped
-      // append: the merge path slots existing attachments first and truncates
-      // at the send limit, which would silently drop this message's images if
-      // the user attached new ones while the write was in flight.
-      void mergeComposerDraftContent(threadKey, { text, attachments: [] });
-      appendComposerDraftAttachments(threadKey, attachments);
-      setPendingConnectionError(
-        error instanceof Error ? error.message : "Failed to save the queued message.",
-      );
-    });
-    return messageId;
-  }, [selectedThreadDetail, selectedThreadShell]);
+      const metadata = makeQueuedMessageMetadata();
+      const messageId = MessageId.make(metadata.messageId);
+      // Enqueue publishes the queued atom synchronously. Clear immediately for
+      // tap-frame feedback, then restore the draft if durable persistence fails.
+      const enqueuePromise = enqueueThreadOutboxMessage({
+        environmentId: selectedThreadShell.environmentId,
+        threadId: selectedThreadShell.id,
+        messageId,
+        commandId: CommandId.make(metadata.commandId),
+        text,
+        attachments,
+        modelSelection: draft.modelSelection ?? thread.modelSelection,
+        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+        interactionMode: draft.interactionMode ?? thread.interactionMode,
+        ...(options?.midTurnInputMode !== undefined
+          ? { midTurnInputMode: options.midTurnInputMode }
+          : {}),
+        ...(options?.deferUserMessageUntilProviderEcho === true
+          ? { deferUserMessageUntilProviderEcho: true }
+          : {}),
+        createdAt: metadata.createdAt,
+      });
+      clearComposerDraftContent(threadKey);
+      enqueuePromise.catch((error: unknown) => {
+        void mergeComposerDraftContent(threadKey, { text, attachments: [] });
+        appendComposerDraftAttachments(threadKey, attachments);
+        setPendingConnectionError(
+          error instanceof Error ? error.message : "Failed to save the queued message.",
+        );
+      });
+      return messageId;
+    },
+    [selectedThreadDetail, selectedThreadShell],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -302,6 +319,8 @@ export function useThreadComposerState() {
   return {
     selectedThreadFeed,
     selectedThreadQueueCount,
+    providerInputQueue,
+    contextWindow,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,

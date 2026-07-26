@@ -4,6 +4,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  ProviderInputQueueMutation,
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
@@ -14,6 +15,7 @@ import {
   serializeComposerFileLink,
   type ComposerTrigger,
 } from "@t3tools/shared/composerTrigger";
+import * as Haptics from "expo-haptics";
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -33,7 +35,11 @@ import Animated, {
   FadeOut,
   FadeOutDown,
   LinearTransition,
+  useAnimatedProps,
+  useSharedValue,
+  withTiming,
 } from "react-native-reanimated";
+import Svg, { Circle } from "react-native-svg";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -67,6 +73,13 @@ import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
+import { ContextWindowIndicator } from "./ContextWindowIndicator";
+import { ProviderQueueSheet } from "./ProviderQueueSheet";
+import type {
+  ContextWindowSnapshot,
+  ProviderInputQueueSnapshot,
+} from "../../lib/providerRuntimePresentation";
+import { providerInputQueueCount } from "../../lib/providerRuntimePresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -79,6 +92,97 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
 export const COMPOSER_EXPANDED_CHROME = 174;
+
+const FOLLOW_UP_HOLD_DURATION_MS = 650;
+const FOLLOW_UP_PROGRESS_RADIUS = 18;
+const FOLLOW_UP_PROGRESS_CIRCUMFERENCE = 2 * Math.PI * FOLLOW_UP_PROGRESS_RADIUS;
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+function PiMidTurnSendButton(props: {
+  readonly disabled: boolean;
+  readonly onSteer: () => void;
+  readonly onFollowUp: () => void;
+}) {
+  const [holding, setHolding] = useState(false);
+  const followUpSentRef = useRef(false);
+  const progress = useSharedValue(0);
+  const progressProps = useAnimatedProps(() => ({
+    strokeDashoffset: FOLLOW_UP_PROGRESS_CIRCUMFERENCE * (1 - progress.value),
+  }));
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoldTimer = useCallback(() => {
+    if (holdTimerRef.current === null) return;
+    clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = null;
+  }, []);
+
+  useEffect(() => clearHoldTimer, [clearHoldTimer]);
+
+  const handlePressIn = useCallback(() => {
+    if (props.disabled) return;
+    clearHoldTimer();
+    followUpSentRef.current = false;
+    setHolding(true);
+    progress.value = 0;
+    progress.value = withTiming(1, { duration: FOLLOW_UP_HOLD_DURATION_MS });
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      if (followUpSentRef.current) return;
+      followUpSentRef.current = true;
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      props.onFollowUp();
+    }, FOLLOW_UP_HOLD_DURATION_MS);
+  }, [clearHoldTimer, progress, props.disabled, props.onFollowUp]);
+
+  const handlePressOut = useCallback(() => {
+    clearHoldTimer();
+    progress.value = 0;
+    setHolding(false);
+  }, [clearHoldTimer, progress]);
+
+  const handlePress = useCallback(() => {
+    if (followUpSentRef.current) {
+      followUpSentRef.current = false;
+      return;
+    }
+    props.onSteer();
+  }, [props.onSteer]);
+
+  const progressRing = holding ? (
+    <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
+      <Svg width={44} height={44} viewBox="0 0 44 44">
+        <AnimatedCircle
+          animatedProps={progressProps}
+          cx={22}
+          cy={22}
+          r={FOLLOW_UP_PROGRESS_RADIUS}
+          fill="none"
+          stroke="rgba(255,255,255,0.9)"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeDasharray={`${FOLLOW_UP_PROGRESS_CIRCUMFERENCE} ${FOLLOW_UP_PROGRESS_CIRCUMFERENCE}`}
+          transform="rotate(-90 22 22)"
+        />
+      </Svg>
+    </View>
+  ) : null;
+
+  return (
+    <View className="relative h-11 w-11">
+      <ControlPill
+        accessibilityLabel="Steer. Hold to send as follow up."
+        disabled={props.disabled}
+        icon="arrow.up"
+        variant={holding ? "blue" : "primary"}
+        onPress={handlePress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      />
+      {progressRing}
+    </View>
+  );
+}
 
 export interface ThreadComposerProps {
   readonly draftMessage: string;
@@ -98,6 +202,9 @@ export interface ThreadComposerProps {
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
+  readonly providerInputQueue: ProviderInputQueueSnapshot;
+  readonly contextWindow: ContextWindowSnapshot | null;
+  readonly inputQueueMutationPending: boolean;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
@@ -107,7 +214,11 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSendMessage: (options?: {
+    readonly midTurnInputMode?: "steer" | "followUp";
+    readonly deferUserMessageUntilProviderEcho?: boolean;
+  }) => Promise<MessageId | null>;
+  readonly onMutateInputQueue: (mutation: ProviderInputQueueMutation) => void;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -274,6 +385,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     editorRef: inputRef,
     isEditorFocused: isFocused,
   });
+  const [providerQueueSheetOpen, setProviderQueueSheetOpen] = useState(false);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -318,10 +430,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
 
-  const sendLabel =
-    props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
-      ? "Queue"
-      : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
@@ -341,6 +449,28 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  const isPiProvider = selectedProviderStatus?.driver === "pi";
+  const allowPiMidTurnInput = isPiProvider && props.activeThreadBusy;
+  const sendLabel =
+    props.connectionState !== "connected"
+      ? "Queue"
+      : allowPiMidTurnInput
+        ? "Steer"
+        : props.activeThreadBusy || props.queueCount > 0
+          ? "Queue"
+          : "Send";
+  const providerQueueCount = providerInputQueueCount(props.providerInputQueue);
+  const providerDisplayName = selectedProviderStatus?.displayName?.trim() || "Pi";
+
+  useEffect(() => {
+    setProviderQueueSheetOpen(false);
+  }, [props.selectedThread.id]);
+
+  useEffect(() => {
+    if (providerQueueCount === 0) {
+      setProviderQueueSheetOpen(false);
+    }
+  }, [providerQueueCount]);
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({
@@ -523,30 +653,45 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
-  const handleSend = useCallback(async () => {
-    const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
-    if (inFlightThreadIdsRef.current.has(threadKey)) return;
-    inFlightThreadIdsRef.current.add(threadKey);
-    try {
-      await onSendMessage();
-      // Sending a prompt starts agent work: arm the lock-screen card while the
-      // app is foregrounded and the activity token can be registered. Armed
-      // after the send so its preference read and native Activity start don't
-      // contend with the queued-message feedback on the tap frame.
-      armAgentAwarenessLiveActivityForLocalWork({
-        threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
-      });
-    } finally {
-      inFlightThreadIdsRef.current.delete(threadKey);
-    }
-  }, [
-    onSendMessage,
-    props.environmentId,
-    props.environmentLabel,
-    props.selectedThread.id,
-    props.selectedThread.title,
-  ]);
+  const handleSend = useCallback(
+    async (requestedMode?: "steer" | "followUp") => {
+      const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+      if (inFlightThreadIdsRef.current.has(threadKey)) return;
+      inFlightThreadIdsRef.current.add(threadKey);
+      try {
+        await onSendMessage(
+          allowPiMidTurnInput
+            ? {
+                midTurnInputMode: requestedMode ?? "steer",
+                deferUserMessageUntilProviderEcho: true,
+              }
+            : undefined,
+        );
+        // Arm after enqueue so native Activity setup does not contend with
+        // queued-message feedback on the tap frame.
+        armAgentAwarenessLiveActivityForLocalWork({
+          threadTitle: props.selectedThread.title,
+          projectTitle: props.environmentLabel ?? "T3 Code",
+        });
+      } finally {
+        inFlightThreadIdsRef.current.delete(threadKey);
+      }
+    },
+    [
+      allowPiMidTurnInput,
+      onSendMessage,
+      props.environmentId,
+      props.environmentLabel,
+      props.selectedThread.id,
+      props.selectedThread.title,
+    ],
+  );
+  const handleDefaultSendPress = useCallback(() => {
+    void handleSend();
+  }, [handleSend]);
+  const handleFollowUpSend = useCallback(() => {
+    void handleSend("followUp");
+  }, [handleSend]);
   const handleCommandSelect = useCallback(
     (item: ComposerCommandItem) => {
       if (!composerTrigger) return;
@@ -718,7 +863,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               placeholder={props.placeholder}
               onFocus={handleFocus}
               onBlur={handleBlur}
-              onSubmit={handleSend}
+              onSubmit={() => void handleSend()}
               scrollEnabled={isExpanded}
               // Android: collapsed single line centers natively (gravity) in
               // a pill-height box matching the send button; iOS keeps insets.
@@ -763,15 +908,27 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </View>
           ) : null}
           {!isExpanded ? (
-            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
+            <Animated.View
+              entering={FadeIn.duration(180)}
+              exiting={FadeOut.duration(100)}
+              className="flex-row items-center gap-1.5"
+            >
               {showStopAction ? (
                 <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
-              ) : (
+              ) : null}
+              {allowPiMidTurnInput ? (
+                <PiMidTurnSendButton
+                  disabled={!canSend}
+                  onSteer={handleDefaultSendPress}
+                  onFollowUp={handleFollowUpSend}
+                />
+              ) : showStopAction ? null : (
                 <ControlPill
                   icon="arrow.up"
                   variant="primary"
                   disabled={!canSend}
-                  onPress={handleSend}
+                  accessibilityLabel={sendLabel}
+                  onPress={handleDefaultSendPress}
                 />
               )}
             </Animated.View>
@@ -801,6 +958,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   maxWidth={320}
                   onPress={settingsSheetPresentation.open}
                 />
+                {props.contextWindow ? (
+                  <ContextWindowIndicator usage={props.contextWindow} />
+                ) : null}
+              </ComposerToolbarScroller>
+              <View className="flex-row items-center gap-1.5">
                 {showStopAction ? (
                   <ComposerToolbarButton
                     accessibilityLabel="Stop"
@@ -810,20 +972,54 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     showChevron={false}
                   />
                 ) : null}
-              </ComposerToolbarScroller>
-              <ComposerToolbarButton
-                accessibilityLabel={sendLabel}
-                icon="arrow.up"
-                variant="primary"
-                disabled={!canSend}
-                onPress={handleSend}
-                showChevron={false}
-              />
+                {allowPiMidTurnInput ? (
+                  <PiMidTurnSendButton
+                    disabled={!canSend}
+                    onSteer={handleDefaultSendPress}
+                    onFollowUp={handleFollowUpSend}
+                  />
+                ) : (
+                  <ComposerToolbarButton
+                    accessibilityLabel={sendLabel}
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canSend}
+                    onPress={handleDefaultSendPress}
+                    showChevron={false}
+                  />
+                )}
+              </View>
             </ComposerToolbarRow>
           </Animated.View>
         ) : null}
 
-        {/* Queue count */}
+        {providerQueueCount > 0 ? (
+          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`View ${providerQueueCount} provider queued messages`}
+              className="pt-2"
+              onPress={() => setProviderQueueSheetOpen(true)}
+            >
+              <Text className="text-xs text-foreground-muted">
+                {props.providerInputQueue.steering.length > 0
+                  ? `${props.providerInputQueue.steering.length} steering`
+                  : ""}
+                {props.providerInputQueue.steering.length > 0 &&
+                props.providerInputQueue.followUp.length > 0
+                  ? " · "
+                  : ""}
+                {props.providerInputQueue.followUp.length > 0
+                  ? `${props.providerInputQueue.followUp.length} follow up`
+                  : ""}
+                {" queued for "}
+                {providerDisplayName}
+              </Text>
+            </Pressable>
+          </Animated.View>
+        ) : null}
+
+        {/* Local offline queue count */}
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
             <Text className="pt-2 text-xs text-foreground-muted">
@@ -847,6 +1043,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }
         runtimeMode={currentRuntimeMode}
         onUpdateRuntimeMode={props.onUpdateRuntimeMode}
+      />
+
+      <ProviderQueueSheet
+        visible={providerQueueSheetOpen && providerQueueCount > 0}
+        snapshot={props.providerInputQueue}
+        providerDisplayName={providerDisplayName}
+        isMutating={props.inputQueueMutationPending}
+        onClose={() => setProviderQueueSheetOpen(false)}
+        onMutate={props.onMutateInputQueue}
       />
 
       <ImageViewing
