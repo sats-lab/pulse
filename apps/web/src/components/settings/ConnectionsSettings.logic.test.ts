@@ -1,6 +1,9 @@
 import type { DesktopWslState } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { applyWslEnableSelection } from "./ConnectionsSettings.logic";
+import {
+  applyWslEnableSelection,
+  shouldIncludePrimaryAccessEnvironment,
+} from "./ConnectionsSettings.logic";
 
 const baseWslState: DesktopWslState = {
   enabled: false,
@@ -10,6 +13,45 @@ const baseWslState: DesktopWslState = {
   distros: [],
   preflightError: null,
 };
+
+describe("shouldIncludePrimaryAccessEnvironment", () => {
+  it("hides the primary environment while desktop network access is disabled", () => {
+    expect(
+      shouldIncludePrimaryAccessEnvironment({
+        desktopMode: true,
+        desktopRemotelyReachable: false,
+        authPolicy: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows the primary environment for reachable desktop and web backends", () => {
+    expect(
+      shouldIncludePrimaryAccessEnvironment({
+        desktopMode: true,
+        desktopRemotelyReachable: true,
+        authPolicy: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldIncludePrimaryAccessEnvironment({
+        desktopMode: false,
+        desktopRemotelyReachable: false,
+        authPolicy: "remote-reachable",
+      }),
+    ).toBe(true);
+  });
+
+  it("hides a loopback browser backend", () => {
+    expect(
+      shouldIncludePrimaryAccessEnvironment({
+        desktopMode: false,
+        desktopRemotelyReachable: false,
+        authPolicy: "loopback-browser",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("applyWslEnableSelection", () => {
   it("clears WSL-only and updates the distro before enabling both backends", async () => {
