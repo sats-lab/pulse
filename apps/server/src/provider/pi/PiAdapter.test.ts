@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import {
+  EnvironmentId,
   EventId,
   PiSettings,
   ProviderDriverKind,
@@ -26,6 +27,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makePiAdapter, projectPiSessionEvent } from "./PiAdapter.ts";
 
 const THREAD_ID = ThreadId.make("thread-pi");
@@ -265,6 +267,22 @@ function makeControllablePiSession(input?: { readonly skills?: ReadonlyArray<Ski
   };
 }
 
+const TEST_MCP_SESSION = {
+  environmentId: EnvironmentId.make("environment-pi-test"),
+  threadId: THREAD_ID,
+  providerSessionId: "provider-session-pi-test",
+  providerInstanceId: INSTANCE_ID,
+  endpoint: "http://127.0.0.1:3773/mcp",
+  authorizationHeader: "Bearer pi-test",
+} as const;
+
+const withTestMcpSession = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => McpProviderSession.setMcpProviderSession(TEST_MCP_SESSION)),
+    () => effect,
+    () => Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID)),
+  );
+
 const waitUntil = Effect.fn("waitForPiAdapterTestCondition")(function* (predicate: () => boolean) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return;
@@ -469,6 +487,70 @@ describe("Pi adapter resource discovery", () => {
       });
       expect(otherProject.commands.map((command) => command.name)).toEqual(["reload", "compact"]);
     }).pipe(Effect.scoped, Effect.provide(PI_ADAPTER_TEST_LAYER));
+  });
+});
+
+describe("Pi adapter Pulse tools", () => {
+  effectIt.effect("registers Pulse tools and keeps them in an explicit Pi allowlist", () => {
+    const controlled = makeControllablePiSession();
+    const model = { provider: "test", id: "model", contextWindow: 128_000 };
+    const modelRuntime = {
+      getModel: () => model,
+      getAvailable: async () => [model],
+      getAuth: async () => ({ auth: { apiKey: "test" }, env: {} }),
+    } as unknown as ModelRuntime;
+    let capturedOptions:
+      | Parameters<typeof import("@earendil-works/pi-coding-agent").createAgentSession>[0]
+      | undefined;
+    const settings = decodePiSettings({ tools: ["read"] });
+
+    return Effect.gen(function* () {
+      const adapter = yield* makePiAdapter(settings, {
+        instanceId: INSTANCE_ID,
+        modelRuntime,
+        environment: {},
+        createAgentSession: async (options): Promise<CreateAgentSessionResult> => {
+          capturedOptions = options;
+          return {
+            session: controlled.session,
+            extensionsResult: {
+              extensions: [],
+              errors: [],
+              runtime: {} as CreateAgentSessionResult["extensionsResult"]["runtime"],
+            },
+          };
+        },
+      });
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("pi"),
+        providerInstanceId: INSTANCE_ID,
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: INSTANCE_ID, model: "test/model" },
+      });
+
+      expect(capturedOptions?.tools).toEqual(["read", "pulse_capability", "pulse_execute"]);
+      expect(capturedOptions?.customTools?.map((tool) => tool.name)).toEqual([
+        "pulse_capability",
+        "pulse_execute",
+      ]);
+      expect(capturedOptions?.customTools?.[0]?.promptGuidelines).toContain(
+        "Do not switch to standalone Playwright, Chrome, global browser skills, or agent-browser unless pulse_execute reports the Pulse preview is unsupported/unavailable or the user explicitly asks for another browser.",
+      );
+      const executeTool = capturedOptions?.customTools?.find(
+        (tool) => tool.name === "pulse_execute",
+      );
+      const unavailable = yield* Effect.promise(() =>
+        executeTool!.execute(
+          "call-unavailable",
+          { operation: "preview.status" },
+          undefined,
+          undefined,
+          {} as never,
+        ),
+      );
+      expect(unavailable.details).toMatchObject({ error: "preview_broker_unavailable" });
+    }).pipe(withTestMcpSession, Effect.scoped, Effect.provide(PI_ADAPTER_TEST_LAYER));
   });
 });
 
