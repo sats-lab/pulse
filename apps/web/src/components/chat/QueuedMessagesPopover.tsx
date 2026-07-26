@@ -110,12 +110,12 @@ export function QueueSection(props: {
           return (
             <div
               key={`${props.mode}-${message}-${occurrence}`}
-              className="flex items-start gap-2.5 rounded-lg px-2 py-2.5 transition-colors hover:bg-foreground/[0.035]"
+              className="flex min-h-10 items-center gap-2.5 rounded-lg px-2 py-2.5 transition-colors hover:bg-foreground/[0.035]"
             >
-              <span className="grid size-5 shrink-0 place-items-center self-start rounded-full border border-border/60 bg-background/55 font-mono text-[9px] leading-none tabular-nums text-muted-foreground/55">
+              <span className="grid size-5 shrink-0 place-items-center rounded-full border border-border/60 bg-background/55 font-mono text-[9px] leading-none tabular-nums text-muted-foreground/55">
                 {index + 1}
               </span>
-              <p className="min-w-0 flex-1 self-start whitespace-pre-wrap break-words text-pretty text-[12px] leading-5 text-foreground/82">
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-pretty text-[12px] leading-5 text-foreground/82">
                 {message}
               </p>
               {props.canMutate ? (
@@ -130,7 +130,7 @@ export function QueueSection(props: {
                       expectedText: message,
                     })
                   }
-                  className="grid size-6 shrink-0 cursor-pointer place-items-center self-start rounded-md text-muted-foreground/55 hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground/55 hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
                   aria-label={`Remove queued ${isSteering ? "steering" : "follow-up"} message ${index + 1}`}
                 >
                   <XIcon className="size-3.5" />
