@@ -1,5 +1,6 @@
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -51,6 +52,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.serverReportHostPowerState]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetBackgroundPolicy]: AuthOrchestrationReadScope,
+  [WS_METHODS.authCreatePairingCredential]: AuthAccessWriteScope,
+  [WS_METHODS.authRevokePairingLink]: AuthAccessWriteScope,
+  [WS_METHODS.authRevokeClient]: AuthAccessWriteScope,
+  [WS_METHODS.authRevokeOtherClients]: AuthAccessWriteScope,
   [WS_METHODS.cloudGetRelayClientStatus]: AuthRelayReadScope,
   [WS_METHODS.cloudInstallRelayClient]: AuthRelayWriteScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,

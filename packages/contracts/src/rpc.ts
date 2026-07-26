@@ -4,8 +4,13 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  AuthAccessOperationError,
   AuthAccessStreamError,
   AuthAccessStreamEvent,
+  AuthCreatePairingCredentialInput,
+  AuthPairingCredentialResult,
+  AuthRevokeClientSessionInput,
+  AuthRevokePairingLinkInput,
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import {
@@ -252,6 +257,12 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
+
+  // Environment access management
+  authCreatePairingCredential: "auth.createPairingCredential",
+  authRevokePairingLink: "auth.revokePairingLink",
+  authRevokeClient: "auth.revokeClient",
+  authRevokeOtherClients: "auth.revokeOtherClients",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -816,6 +827,29 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsAuthCreatePairingCredentialRpc = Rpc.make(WS_METHODS.authCreatePairingCredential, {
+  payload: AuthCreatePairingCredentialInput,
+  success: AuthPairingCredentialResult,
+  error: Schema.Union([AuthAccessOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsAuthRevokePairingLinkRpc = Rpc.make(WS_METHODS.authRevokePairingLink, {
+  payload: AuthRevokePairingLinkInput,
+  success: Schema.Struct({ revoked: Schema.Boolean }),
+  error: Schema.Union([AuthAccessOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsAuthRevokeClientRpc = Rpc.make(WS_METHODS.authRevokeClient, {
+  payload: AuthRevokeClientSessionInput,
+  success: Schema.Struct({ revoked: Schema.Boolean }),
+  error: Schema.Union([AuthAccessOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsAuthRevokeOtherClientsRpc = Rpc.make(WS_METHODS.authRevokeOtherClients, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ revokedCount: Schema.Number }),
+  error: Schema.Union([AuthAccessOperationError, EnvironmentAuthorizationError]),
+});
 export const WsRpcGroup = RpcGroup.make(
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderListSkillsRpc,
@@ -892,6 +926,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsAuthCreatePairingCredentialRpc,
+  WsAuthRevokePairingLinkRpc,
+  WsAuthRevokeClientRpc,
+  WsAuthRevokeOtherClientsRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
