@@ -526,7 +526,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   .chat-composer-glass-host {
     position: relative;
-    box-shadow: 0 12px 28px -18px rgb(0 0 0 / 40%);
+    /* box-shadow: 0 12px 28px -18px rgb(0 0 0 / 40%); */
   }
 
   .chat-composer-glass-host::after {
@@ -537,20 +537,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     border: 1px solid var(--chat-composer-outline);
     border-radius: inherit;
     content: "";
-  }
-
-  .chat-composer-glass-shell-with-context .chat-composer-glass-host::after {
-    /* Keep the attachment seam open; the strip continues the outer outline below. */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% 100%,
-      calc(100% - 22px) 100%,
-      calc(100% - 22px) calc(100% - 2px),
-      22px calc(100% - 2px),
-      22px 100%,
-      0 100%
-    );
   }
 
   .chat-composer-context-strip {

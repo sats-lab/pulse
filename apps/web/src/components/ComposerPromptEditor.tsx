@@ -1754,7 +1754,7 @@ function ComposerPromptEditorInner({
               className={cn(
                 // The size comes from .composer-editor-surface so Settings -> Appearance
                 // can drive it; keep everything else here.
-                "block max-h-50 min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
+                "block max-h-50 min-h-12.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
                 className,
               )}
               data-testid="composer-editor"
