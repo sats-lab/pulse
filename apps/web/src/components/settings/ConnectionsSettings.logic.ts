@@ -1,4 +1,9 @@
-import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import type {
+  AdvertisedEndpoint,
+  DesktopBridge,
+  DesktopWslState,
+  ServerAuthPolicy,
+} from "@t3tools/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
 
@@ -12,25 +17,13 @@ export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
 }
 
 export type QrEndpointOption = {
-  /** Unique per endpoint instance (AdvertisedEndpoint.id); safe as a React key. */
   readonly id: string;
-  /**
-   * Stable per endpoint *type* (endpointDefaultPreferenceKey). Multiple
-   * endpoints can share one, so it is only used to match the saved default.
-   */
   readonly preferenceKey: string;
-  /** False for endpoints that stay copyable but must never render as a QR. */
   readonly qrShareable: boolean;
 };
 
-/**
- * Resolves which endpoint the share panel shows: the user's explicit pick,
- * else the saved default endpoint, else the first QR-shareable option (so the
- * panel never opens on a loopback QR), else the first option. A stale
- * selectedId (endpoint disappeared) falls back rather than blanking the panel.
- */
 export function selectQrEndpointOption<T extends QrEndpointOption>(
-  options: ReadonlyArray<T>,
+  options: readonly T[],
   selectedId: string | null,
   defaultPreferenceKey: string | null,
 ): T | null {
@@ -43,6 +36,16 @@ export function selectQrEndpointOption<T extends QrEndpointOption>(
     options[0] ??
     null
   );
+}
+
+export function shouldIncludePrimaryAccessEnvironment(input: {
+  readonly desktopMode: boolean;
+  readonly desktopRemotelyReachable: boolean;
+  readonly authPolicy: ServerAuthPolicy | null;
+}): boolean {
+  return input.desktopMode
+    ? input.desktopRemotelyReachable
+    : input.authPolicy === "remote-reachable";
 }
 
 export async function applyWslEnableSelection(input: {
