@@ -1,6 +1,16 @@
-import type { DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import type { DesktopBridge, DesktopWslState, ServerAuthPolicy } from "@t3tools/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
+
+export function shouldIncludePrimaryAccessEnvironment(input: {
+  readonly desktopMode: boolean;
+  readonly desktopRemotelyReachable: boolean;
+  readonly authPolicy: ServerAuthPolicy | null;
+}): boolean {
+  return input.desktopMode
+    ? input.desktopRemotelyReachable
+    : input.authPolicy === "remote-reachable";
+}
 
 export async function applyWslEnableSelection(input: {
   readonly bridge: WslEnableBridge;
