@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -38,6 +39,8 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { makePreviewAutomationSnapshotToolView } from "../../mcp/PreviewAutomationSnapshotArtifacts.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -54,6 +57,7 @@ import {
   type PiToolTextProjection,
   type PiToolTextProjector,
 } from "./PiToolOutputProjector.ts";
+import { makePiPulseTools, PULSE_PI_TOOL_NAMES } from "./PiPulseTools.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -138,7 +142,7 @@ export interface PiAdapterOptions {
   ) => Promise<AgentSessionServices>;
 }
 
-export type PiAdapterEnv = Crypto.Crypto | FileSystem.FileSystem | ServerConfig;
+export type PiAdapterEnv = Crypto.Crypto | FileSystem.FileSystem | Path.Path | ServerConfig;
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -952,11 +956,13 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
 ) {
   const serverConfig = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
   const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, PiSessionContext>();
   const effectContext = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(effectContext);
+  const runPromise = Effect.runPromiseWith(effectContext);
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(
       (cause) =>
@@ -1236,6 +1242,29 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       : undefined;
     const scope = yield* Scope.make();
     const thinkingLevel = resolveThinkingLevel({ modelSelection: input.modelSelection });
+    const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+    const issuedAt = DateTime.nowUnsafe().epochMilliseconds;
+    const piPulseTools = mcpSession
+      ? makePiPulseTools({
+          environmentId: mcpSession.environmentId,
+          threadId: input.threadId,
+          providerInstanceId: options.instanceId,
+          providerSessionId: mcpSession.providerSessionId,
+          makeSnapshotToolView: (snapshot) =>
+            runPromise(
+              makePreviewAutomationSnapshotToolView({
+                stateDir: serverConfig.stateDir,
+                threadId: input.threadId,
+                snapshot,
+              }).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              ),
+            ),
+          issuedAt,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        })
+      : [];
     const created = yield* Effect.tryPromise({
       try: async () => {
         const created = await (options.createAgentSession ?? createAgentSession)({
@@ -1245,9 +1274,19 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           model,
           ...(thinkingLevel ? { thinkingLevel } : {}),
           ...(sessionManager ? { sessionManager } : {}),
-          ...(settings.tools.length > 0 ? { tools: [...settings.tools] } : {}),
+          ...(settings.tools.length > 0
+            ? {
+                tools: [
+                  ...new Set([
+                    ...settings.tools,
+                    ...(piPulseTools.length > 0 ? PULSE_PI_TOOL_NAMES : []),
+                  ]),
+                ],
+              }
+            : {}),
           ...(settings.excludeTools.length > 0 ? { excludeTools: [...settings.excludeTools] } : {}),
           ...(settings.noTools ? { noTools: settings.noTools } : {}),
+          ...(piPulseTools.length > 0 ? { customTools: piPulseTools } : {}),
         });
         await created.session.bindExtensions({ mode: "rpc" });
         return created;

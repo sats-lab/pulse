@@ -42,20 +42,22 @@ export interface PreviewAutomationInvokeInput {
   readonly timeoutMs?: number;
 }
 
+export interface PreviewAutomationBrokerShape {
+  readonly connect: (
+    host: PreviewAutomationHost,
+  ) => Effect.Effect<Stream.Stream<PreviewAutomationStreamEvent>>;
+  readonly focusHost: (host: PreviewAutomationHostFocus) => Effect.Effect<void>;
+  readonly respond: (
+    response: PreviewAutomationResponse,
+  ) => Effect.Effect<void, PreviewAutomationError>;
+  readonly invoke: <A = unknown>(
+    request: PreviewAutomationInvokeInput,
+  ) => Effect.Effect<A, PreviewAutomationError>;
+}
+
 export class PreviewAutomationBroker extends Context.Service<
   PreviewAutomationBroker,
-  {
-    readonly connect: (
-      host: PreviewAutomationHost,
-    ) => Effect.Effect<Stream.Stream<PreviewAutomationStreamEvent>>;
-    readonly focusHost: (host: PreviewAutomationHostFocus) => Effect.Effect<void>;
-    readonly respond: (
-      response: PreviewAutomationResponse,
-    ) => Effect.Effect<void, PreviewAutomationError>;
-    readonly invoke: <A = unknown>(
-      request: PreviewAutomationInvokeInput,
-    ) => Effect.Effect<A, PreviewAutomationError>;
-  }
+  PreviewAutomationBrokerShape
 >()("@sats-lab/pulse/mcp/PreviewAutomationBroker") {}
 
 interface ClientConnection {
@@ -584,4 +586,25 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
-export const layer = Layer.effect(PreviewAutomationBroker, make);
+let activePreviewAutomationBroker: PreviewAutomationBrokerShape | undefined;
+
+const activeBrokerMake = Effect.acquireRelease(
+  make.pipe(
+    Effect.tap((broker) =>
+      Effect.sync(() => {
+        activePreviewAutomationBroker = broker;
+      }),
+    ),
+  ),
+  (broker) =>
+    Effect.sync(() => {
+      if (activePreviewAutomationBroker === broker) {
+        activePreviewAutomationBroker = undefined;
+      }
+    }),
+);
+
+export const getActivePreviewAutomationBroker = (): PreviewAutomationBrokerShape | undefined =>
+  activePreviewAutomationBroker;
+
+export const layer = Layer.effect(PreviewAutomationBroker, activeBrokerMake);
