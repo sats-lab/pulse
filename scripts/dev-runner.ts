@@ -29,6 +29,7 @@ const BASE_WEB_PORT = 5733;
 const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
+const WEB_DEV_DEFAULT_HOST = "0.0.0.0";
 // HTTP(S) requests to these ports are blocked by the Fetch standard before a
 // browser reaches the network. Keep the complete list here so explicit or
 // future wider offsets cannot produce a URL that curl accepts but browsers
@@ -352,21 +353,27 @@ export function createDevRunnerEnv({
       // page loads and only HMR quietly dials the wrong machine.
       delete output.HOST;
       if (mode === "dev" || mode === "dev:web") {
-        // Browser dev is single-origin: everything (including /ws) is proxied
-        // through Vite, so the client must resolve its backend from
-        // window.location.origin rather than a baked-in localhost URL. See
-        // resolveConfiguredPrimaryTarget in apps/web/src/environments/primary/target.ts
-        // — it only defers to the origin when both of these are absent. Baking
-        // localhost here is what breaks any non-localhost origin (tailnet, LAN,
-        // phone): the remote browser dials its own machine.
-        delete output.VITE_HTTP_URL;
-        delete output.VITE_WS_URL;
-        // Deleting is not enough on its own: vite.config.ts calls loadRepoEnv,
-        // which merges `.env`/`.env.local` *under* this env, so a developer
-        // with either URL in their `.env` would get it back and silently lose
-        // single-origin mode. This states the intent positively so Vite can
-        // ignore those values rather than infer from their absence.
-        output.T3CODE_SINGLE_ORIGIN_DEV = "1";
+        // An explicitly reverse-proxied dev origin routes browser HTTP and
+        // WebSocket traffic to the backend itself, keeping the session cookie
+        // same-origin. It must remain explicit rather than relying on the
+        // browser's local origin, which may differ from this public URL.
+        if (devUrl) {
+          const publicHttpUrl = new URL(devUrl.origin);
+          const publicWsUrl = new URL(publicHttpUrl);
+          publicWsUrl.protocol = publicHttpUrl.protocol === "https:" ? "wss:" : "ws:";
+          output.VITE_HTTP_URL = publicHttpUrl.toString();
+          output.VITE_WS_URL = publicWsUrl.toString();
+          delete output.T3CODE_SINGLE_ORIGIN_DEV;
+        } else {
+          // Browser dev is single-origin: everything (including /ws) is
+          // proxied through Vite, so resolve the backend from
+          // window.location.origin instead of baking in localhost URLs.
+          delete output.VITE_HTTP_URL;
+          delete output.VITE_WS_URL;
+          // Deleting alone is not sufficient: vite.config.ts merges
+          // `.env`/`.env.local` underneath this environment.
+          output.T3CODE_SINGLE_ORIGIN_DEV = "1";
+        }
       } else if (serverUrl) {
         const publicHttpUrl = new URL(serverUrl.origin);
         const publicWsUrl = new URL(publicHttpUrl);
@@ -391,8 +398,8 @@ export function createDevRunnerEnv({
       delete output.T3CODE_HOST;
     }
 
-    if (!isDesktopMode && host !== undefined) {
-      output.T3CODE_HOST = host;
+    if (!isDesktopMode) {
+      output.T3CODE_HOST = host ?? WEB_DEV_DEFAULT_HOST;
     }
 
     if (!isDesktopMode) {
@@ -578,6 +585,16 @@ export function resolveModePortOffsets<R = NetService.NetService>({
     const checkPort = (checkPortAvailability ??
       defaultCheckPortAvailability) as PortAvailabilityCheck<R>;
 
+    if (mode === "dev" && hasExplicitServerPort) {
+      const webOffset = yield* findFirstAvailableOffset({
+        startOffset,
+        requireServerPort: false,
+        requireWebPort: true,
+        checkPortAvailability: checkPort,
+      });
+      return { serverOffset: startOffset, webOffset };
+    }
+
     if (mode === "dev:web") {
       if (hasExplicitDevUrl) {
         return { serverOffset: startOffset, webOffset: startOffset };
@@ -668,7 +685,11 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     const { serverOffset, webOffset } = yield* resolveModePortOffsets({
       mode: input.mode,
       startOffset: offset,
-      hasExplicitServerPort: input.port !== undefined,
+      // A public dev URL identifies one stable routed environment. Reusing the
+      // requested backend port lets a restart replace that environment instead
+      // of silently selecting a new backend while the proxy still targets the
+      // old one. Explicit --port keeps the same stable-port behavior.
+      hasExplicitServerPort: input.port !== undefined || input.devUrl !== undefined,
       // --dev-url describes the public route to the locally started Vite
       // server; it does not mean that a separate web server already exists.
       hasExplicitDevUrl: false,
@@ -711,7 +732,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_T3_HOME);
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverHost=${String(env.T3CODE_HOST ?? "default")} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
     );
 
     // Before the share block: --dry-run only resolves and prints. Sharing would
