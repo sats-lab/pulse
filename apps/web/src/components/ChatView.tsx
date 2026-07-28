@@ -4671,6 +4671,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    // Mid-turn inputs belong to the provider queue, not the chat transcript.
+    // Defer their local echo so queued steers/follow-ups never render as user
+    // bubbles; the queue surface is their only client presentation.
     const shouldDeferUserMessageUntilProviderEcho =
       isServerThread &&
       activeThread.session?.status === "running" &&

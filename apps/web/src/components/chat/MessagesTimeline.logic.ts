@@ -2,6 +2,7 @@ import * as Equal from "effect/Equal";
 import {
   formatDuration,
   workEntryIndicatesToolNeutralStatus,
+  workEntryIsInProgress,
   workLogEntryIsToolLike,
   type TimelineEntry,
   type WorkLogEntry,
@@ -231,8 +232,8 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
     }
     const { message } = timelineEntry;
     if (message.role === "user") {
-      // A turn-associated user message is steering within the current
-      // response, not the boundary that starts a new unkeyed response.
+      // A turn-associated user message is Pi's delivery echo for an already
+      // queued steer/follow-up, not the boundary of a new response.
       if (!message.turnId) {
         nullTurnResponseIndex += 1;
       }
@@ -484,7 +485,7 @@ export function deriveMessagesTimelineRows(input: {
         cursor += 1;
       }
       const visibleGroupedEntries = groupedEntries.filter(
-        (entry) => !workEntryIndicatesToolNeutralStatus(entry),
+        (entry) => workEntryIsInProgress(entry) || !workEntryIndicatesToolNeutralStatus(entry),
       );
       if (visibleGroupedEntries.length > 0) {
         if (visibleGroupedEntries.length <= MAX_VISIBLE_WORK_LOG_ENTRIES) {

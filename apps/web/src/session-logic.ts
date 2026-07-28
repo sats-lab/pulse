@@ -90,6 +90,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   activityKind: OrchestrationThreadActivity["kind"];
   collapseKey?: string;
   toolCallId?: string;
+  compactionId?: string;
 }
 
 export interface PendingApproval {
@@ -252,6 +253,11 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
     return false;
   }
   return true;
+}
+
+/** True while a provider has announced a tool call but not its final result. */
+export function workEntryIsInProgress(entry: WorkLogEntry): boolean {
+  return workLogEntryIsToolLike(entry) && entry.toolLifecycleStatus === "inProgress";
 }
 
 /** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
@@ -636,7 +642,6 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
-    if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     if (activity.kind === "context-window.updated") continue;
     if (activity.kind === "input.queue.updated") continue;
@@ -726,6 +731,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
+  const compactionId =
+    activity.kind === "context-compaction" ? asTrimmedString(payload?.compactionId) : null;
   if (detail) {
     entry.detail = detail;
   }
@@ -756,7 +763,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
+  if (compactionId) {
+    entry.compactionId = compactionId;
+  }
   let toolLifecycleStatus = extractWorkLogToolLifecycleStatus(payload);
+  if (!toolLifecycleStatus && activity.kind === "tool.started") {
+    toolLifecycleStatus = "inProgress";
+  }
   if (!toolLifecycleStatus && activity.kind === "tool.completed") {
     toolLifecycleStatus = "completed";
   }
@@ -776,7 +789,11 @@ function collapseDerivedWorkLogEntries(
   const collapsed: DerivedWorkLogEntry[] = [];
   for (const entry of entries) {
     const previous = collapsed.at(-1);
-    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+    if (
+      previous &&
+      (shouldCollapseToolLifecycleEntries(previous, entry) ||
+        shouldCollapseContextCompactionEntries(previous, entry))
+    ) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
@@ -785,14 +802,34 @@ function collapseDerivedWorkLogEntries(
   return collapsed;
 }
 
+function shouldCollapseContextCompactionEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  return (
+    previous.activityKind === "context-compaction" &&
+    next.activityKind === "context-compaction" &&
+    previous.compactionId !== undefined &&
+    previous.compactionId === next.compactionId
+  );
+}
+
 function shouldCollapseToolLifecycleEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): boolean {
-  if (previous.activityKind !== "tool.updated" && previous.activityKind !== "tool.completed") {
+  if (
+    previous.activityKind !== "tool.started" &&
+    previous.activityKind !== "tool.updated" &&
+    previous.activityKind !== "tool.completed"
+  ) {
     return false;
   }
-  if (next.activityKind !== "tool.updated" && next.activityKind !== "tool.completed") {
+  if (
+    next.activityKind !== "tool.started" &&
+    next.activityKind !== "tool.updated" &&
+    next.activityKind !== "tool.completed"
+  ) {
     return false;
   }
   if (previous.activityKind === "tool.completed") {
@@ -825,6 +862,7 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const compactionId = next.compactionId ?? previous.compactionId;
   return {
     ...previous,
     ...next,
@@ -839,6 +877,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(compactionId ? { compactionId } : {}),
   };
 }
 
@@ -854,7 +893,11 @@ function mergeChangedFiles(
 }
 
 function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
-  if (entry.activityKind !== "tool.updated" && entry.activityKind !== "tool.completed") {
+  if (
+    entry.activityKind !== "tool.started" &&
+    entry.activityKind !== "tool.updated" &&
+    entry.activityKind !== "tool.completed"
+  ) {
     return undefined;
   }
   if (entry.toolCallId) {

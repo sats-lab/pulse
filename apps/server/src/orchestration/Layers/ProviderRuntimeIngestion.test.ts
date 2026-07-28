@@ -2571,7 +2571,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.filter((message) => message.role === "user")).toHaveLength(0);
   });
 
-  it("creates the user message only after Pi observes delivery", async () => {
+  it("creates a user message only after Pi echoes queue delivery", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -2811,10 +2811,17 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(thread.session?.status).toBe("ready");
     expect(
-      thread.activities.some(
+      thread.activities.find(
         (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
       ),
-    ).toBe(true);
+    ).toMatchObject({
+      payload: {
+        itemType: "command_execution",
+        status: "in_progress",
+        title: "Read file",
+        detail: "/tmp/file.ts",
+      },
+    });
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
@@ -3098,6 +3105,56 @@ describe("ProviderRuntimeIngestion", () => {
       toolUses: 25,
       durationMs: 43_567,
     });
+  });
+
+  it("projects Pi compaction start and completion into one visible work-log activity", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-pi-compaction-start"),
+      provider: ProviderDriverKind.make("pi"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      itemId: "pi-compaction-turn-1" as never,
+      payload: {
+        itemType: "context_compaction",
+        status: "inProgress",
+        title: "Context compaction",
+        data: { reason: "threshold" },
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-pi-compaction-end"),
+      provider: ProviderDriverKind.make("pi"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      itemId: "pi-compaction-turn-1" as never,
+      payload: {
+        itemType: "context_compaction",
+        status: "completed",
+        title: "Context compaction",
+        data: { reason: "threshold", aborted: false, willRetry: false },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-pi-compaction-end" &&
+          activity.kind === "context-compaction" &&
+          activity.summary === "Context compacted automatically",
+      ),
+    );
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-compaction",
+      ),
+    ).toHaveLength(2);
   });
 
   it("projects compacted thread state into context compaction activities", async () => {

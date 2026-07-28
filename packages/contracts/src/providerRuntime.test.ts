@@ -69,7 +69,7 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
-  it("decodes queued input snapshots and observed user messages", () => {
+  it("decodes queued input snapshots and the delivered user-message echo", () => {
     const queued = decodeRuntimeEvent({
       type: "input.queue.updated",
       eventId: "event-queue-1",

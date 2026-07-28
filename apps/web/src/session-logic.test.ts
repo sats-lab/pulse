@@ -691,24 +691,49 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
-  it("omits tool started entries and keeps completed entries", () => {
+  it("shows a running tool immediately and replaces it with the completed result", () => {
     const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
       makeActivity({
         id: "tool-start",
         createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Tool call",
+        summary: "Ran command started",
         kind: "tool.started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: { toolCallId: "tool-call-1", item: { command: "sleep 30" } },
+        },
+      }),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:32.000Z",
+        summary: "Ran command",
+        kind: "tool.completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: { toolCallId: "tool-call-1", item: { command: "sleep 30" } },
+        },
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+    expect(deriveWorkLogEntries([activities[0]!])).toMatchObject([
+      {
+        id: "tool-start",
+        label: "Ran command started",
+        command: "sleep 30",
+        toolLifecycleStatus: "inProgress",
+      },
+    ]);
+    expect(deriveWorkLogEntries(activities)).toMatchObject([
+      {
+        id: "tool-complete",
+        label: "Ran command",
+        command: "sleep 30",
+        toolLifecycleStatus: "completed",
+      },
+    ]);
   });
 
   it("omits input queue snapshots from the work log", () => {
@@ -1581,6 +1606,41 @@ describe("deriveWorkLogEntries context window handling", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Ran command");
+  });
+
+  it("replaces an in-progress automatic compaction entry with its completion", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "compaction-start",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        turnId: "turn-1",
+        kind: "context-compaction",
+        summary: "Automatically compacting context",
+        tone: "info",
+        payload: {
+          compactionId: "pi-compaction-turn-1",
+          status: "inProgress",
+          reason: "automatic",
+        },
+      }),
+      makeActivity({
+        id: "compaction-end",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        turnId: "turn-1",
+        kind: "context-compaction",
+        summary: "Context compacted automatically",
+        tone: "info",
+        payload: {
+          compactionId: "pi-compaction-turn-1",
+          status: "completed",
+          reason: "automatic",
+        },
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      { id: "compaction-end", label: "Context compacted automatically" },
+    ]);
   });
 
   it("keeps context compaction activities as normal work log entries", () => {
