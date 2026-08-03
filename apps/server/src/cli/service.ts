@@ -9,7 +9,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import type * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { portFlag, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { hostFlag, portFlag, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
 export const bootServiceLayer = (config: ServerConfig.ServerConfig["Service"]) =>
   BootService.layer({
@@ -31,6 +31,7 @@ export type ServiceReconcileResult =
 
 /** Install, update, or repair the service using the CLI version running this command. */
 export const reconcileService = Effect.fn("cli.service.reconcile")(function* (options?: {
+  readonly host?: string;
   readonly port?: number;
 }) {
   const service = yield* BootService.BootService;
@@ -38,6 +39,7 @@ export const reconcileService = Effect.fn("cli.service.reconcile")(function* (op
   if (
     status.installed &&
     status.current &&
+    (options?.host === undefined || options.host === status.host) &&
     (options?.port === undefined || options.port === status.port)
   ) {
     return { changed: false, status } satisfies ServiceReconcileResult;
@@ -64,6 +66,7 @@ export function formatServiceStatus(
     "Pulse service",
     `  Status: ${status.current ? `installed · ${packageJson.name}@${cliVersion}` : "needs an update or repair"}`,
     `  Unit: ${status.unitPath}`,
+    ...(status.host === undefined ? [] : [`  Host: ${status.host}`]),
     ...(status.port === undefined ? [] : [`  Port: ${String(status.port)}`]),
     `  Logs: ${status.logPath}`,
     ...(status.current ? [] : ["  Next: Run `npx @sats-lab/pulse@latest service update`."]),
@@ -81,6 +84,7 @@ const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
 
 const serviceInstallCommand = Command.make("install", {
   ...projectLocationFlags,
+  host: hostFlag,
   port: portFlag,
 }).pipe(
   Command.withDescription("Install or reconfigure Pulse as a background service for this user."),
@@ -88,8 +92,16 @@ const serviceInstallCommand = Command.make("install", {
     runServiceCommand(
       flags,
       Effect.gen(function* () {
+        const host = Option.getOrUndefined(flags.host);
         const port = Option.getOrUndefined(flags.port);
-        const result = yield* reconcileService(port === undefined ? undefined : { port });
+        const result = yield* reconcileService(
+          host === undefined && port === undefined
+            ? undefined
+            : {
+                ...(host === undefined ? {} : { host }),
+                ...(port === undefined ? {} : { port }),
+              },
+        );
         if (!result.changed) {
           yield* Console.log(
             `Pulse service is already installed with ${packageJson.name}@${packageJson.version}.`,
