@@ -41,6 +41,7 @@ The following downstream commits are maintained on top of upstream `main`:
 | `3fca0badc297` | `feat(service): brand Pulse unit and persist its port`                    |
 | `42d0c24bc161` | `docs(fork): index Pulse service customization`                           |
 | `7e6e28928725` | `fix(ci): stabilize checks after service branding`                        |
+| `60eead902a8e` | `feat(service): persist host and pin local runtimes`                      |
 
 The release customization preserves upstream workflow definitions under `.github/workflows_upstream/` while activating only CI and the fork-owned release workflow. Releases intentionally omit nightly automation, relay and hosted-web deployment, Discord announcements, WSL preparation, and Windows/Linux builds. They publish macOS artifacts and the existing `@sats-lab/pulse` npm package.
 
