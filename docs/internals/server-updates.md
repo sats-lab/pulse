@@ -7,15 +7,17 @@ and a running server never edits its systemd unit or durable service state.
 
 ## Ownership
 
-The service files under `<baseDir>/runtime` are:
+The service owns these files under `<baseDir>`:
 
-- `service-launcher.mjs`, the stable process selected by systemd;
-- `service-state.json`, the launcher's durable selection state;
-- `versions/<version>`, immutable exact-version npm installs.
+- `service.json`, persistent service configuration such as the listening port;
+- `runtime/service-launcher.mjs`, the stable process selected by systemd;
+- `runtime/service-state.json`, the launcher's durable selection state;
+- `runtime/versions/<version>`, immutable exact-version npm installs.
 
-The launcher is the only runtime writer of `service-state.json`. `t3 service install` and
-`t3 service update` may replace the launcher and state while the unit is stopped. Server children
-only communicate with the launcher over their inherited IPC channel.
+The launcher reads `service.json` before starting a child and is the only runtime writer of
+`service-state.json`. `pulse service install` and `pulse service update` may replace the launcher
+and state while the unit is stopped. Server children only communicate with the launcher over their
+inherited IPC channel.
 
 The state contains one active version and, at most, one update record:
 
@@ -28,7 +30,7 @@ Every write uses same-directory replacement plus file and directory fsync.
 
 ## Remote Update
 
-1. The active server installs `t3@<target>` into a unique staging directory.
+1. The active server installs `@sats-lab/pulse@<target>` into a unique staging directory.
 2. The target runs `__service-preflight` against the active database in read-only mode.
 3. The staging directory is renamed to its immutable version path only after preflight succeeds.
 4. The active child sends `request-update`. The launcher validates the child and target, writes
@@ -57,7 +59,7 @@ unknown migration is blocked. Remote updates never migrate or downgrade a databa
 This deliberately means any release containing a migration requires a local service update:
 
 ```sh
-npx t3@<version> service update
+npx @sats-lab/pulse@<version> service update
 ```
 
 The local command stops the unit, selects the new launcher and exact runtime, then restarts the

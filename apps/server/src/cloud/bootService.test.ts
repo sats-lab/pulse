@@ -23,7 +23,7 @@ it("keeps systemd pinned to the stable launcher rather than a versioned server",
     launcherPath: "/home/theo/.t3/runtime/service-launcher.mjs",
     baseDir: "/home/theo/.t3",
     logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
-    unitPath: "/home/theo/.config/systemd/user/t3code.service",
+    unitPath: "/home/theo/.config/systemd/user/pulse.service",
   });
 
   expect(unit).toContain("ExecStart=/usr/bin/node /home/theo/.t3/runtime/service-launcher.mjs");
@@ -41,6 +41,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   const baseDir = path.join(home, ".t3");
   const sourceLauncher = path.join(home, "service-launcher.mjs");
   const statePath = path.join(baseDir, "runtime", "service-state.json");
+  const configPath = path.join(baseDir, "service.json");
   yield* fs.writeFileString(sourceLauncher, "export {};\n");
   const runtime = pinnedRuntimePaths(path, baseDir, "1.2.3");
   yield* fs.makeDirectory(path.dirname(runtime.entryPath), { recursive: true });
@@ -87,21 +88,33 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       ),
     ),
   );
-  return { service, fs, statePath, commands, control };
+  return {
+    service,
+    fs,
+    home,
+    baseDir,
+    statePath,
+    configPath,
+    commands,
+    control,
+  };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("installs, reports current state, and uninstalls", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, commands } = yield* makeHarness();
-      const plan = yield* service.install;
+      const { service, fs, statePath, configPath, commands } = yield* makeHarness();
+      const plan = yield* service.install({ port: 4773 });
 
+      expect(plan.unitPath).toMatch(/\/pulse\.service$/);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - verifies the launcher-owned JSON file.
+      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({ port: 4773 });
       expect(parseServiceState(yield* fs.readFileString(statePath))).toEqual({
         protocol: 1,
         activeVersion: "1.2.3",
       });
       expect(yield* fs.readFileString(plan.launcherPath)).toBe("export {};\n");
-      expect((yield* service.status).current).toBe(true);
+      expect(yield* service.status).toMatchObject({ current: true, port: 4773 });
       yield* fs.writeFileString(
         statePath,
         '{"protocol":1,"activeVersion":"1.2.3","update":{"id":"u","fromVersion":"1.2.3","targetVersion":"1.2.4","status":"pending"}}',
@@ -113,10 +126,50 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
+  it.effect("keeps the configured port when updating without an explicit port", () =>
+    Effect.gen(function* () {
+      const { service, fs, configPath } = yield* makeHarness();
+      yield* service.install({ port: 4773 });
+      yield* service.install();
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - verifies the launcher-owned JSON file.
+      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({ port: 4773 });
+    }),
+  );
+
+  it.effect("migrates the legacy unit to pulse.service", () =>
+    Effect.gen(function* () {
+      const { service, fs, home, commands } = yield* makeHarness();
+      const legacyUnitPath = `${home}/.config/systemd/user/t3code.service`;
+      yield* fs.makeDirectory(`${home}/.config/systemd/user`, { recursive: true });
+      yield* fs.writeFileString(legacyUnitPath, "legacy unit\n");
+
+      const plan = yield* service.install({ port: 3774 });
+
+      expect(yield* fs.exists(legacyUnitPath)).toBe(false);
+      expect(yield* fs.exists(plan.unitPath)).toBe(true);
+      expect(commands).toContain("systemctl --user disable --now t3code.service");
+      expect(commands).toContain("systemctl --user restart pulse.service");
+    }),
+  );
+
+  it.effect("uninstalls the legacy unit when it is the only installed service", () =>
+    Effect.gen(function* () {
+      const { service, fs, home, commands } = yield* makeHarness();
+      const legacyUnitPath = `${home}/.config/systemd/user/t3code.service`;
+      yield* fs.makeDirectory(`${home}/.config/systemd/user`, { recursive: true });
+      yield* fs.writeFileString(legacyUnitPath, "legacy unit\n");
+
+      expect(yield* service.uninstall).toBe(true);
+      expect(yield* fs.exists(legacyUnitPath)).toBe(false);
+      expect(commands).toContain("systemctl --user disable --now t3code.service");
+    }),
+  );
+
   it.effect("copies the launcher from the prepared pinned runtime", () =>
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness("linux", true);
-      const plan = yield* service.install;
+      const plan = yield* service.install();
 
       expect(yield* fs.readFileString(plan.launcherPath)).toBe(
         "export const source = 'pinned runtime';\n",
@@ -127,16 +180,16 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("restarts an installed service when repair fails", () =>
     Effect.gen(function* () {
       const { service, commands, control } = yield* makeHarness();
-      yield* service.install;
+      yield* service.install();
       commands.length = 0;
       control.failCommand = "systemctl --user daemon-reload";
 
-      const error = yield* service.install.pipe(Effect.flip);
+      const error = yield* service.install().pipe(Effect.flip);
       expect(error._tag).toBe("BootServiceCommandError");
       expect(commands.filter((command) => command.startsWith("systemctl "))).toEqual([
-        "systemctl --user stop t3code.service",
+        "systemctl --user stop pulse.service",
         "systemctl --user daemon-reload",
-        "systemctl --user restart t3code.service",
+        "systemctl --user restart pulse.service",
       ]);
     }),
   );
@@ -145,7 +198,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     Effect.gen(function* () {
       const { service } = yield* makeHarness("darwin");
       expect((yield* service.status).supported).toBe(false);
-      expect((yield* service.install.pipe(Effect.flip))._tag).toBe("BootServiceUnsupportedError");
+      expect((yield* service.install().pipe(Effect.flip))._tag).toBe("BootServiceUnsupportedError");
     }),
   );
 });

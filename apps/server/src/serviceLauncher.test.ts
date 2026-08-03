@@ -4,11 +4,18 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import {
+  Launcher,
+  readServiceArgs,
+  readServiceState,
+  writeServiceState,
+} from "./serviceLauncher.ts";
 import {
   compareExactServiceVersions,
+  decodeServiceConfig,
   decodeServiceState,
   isExactServiceVersion,
+  parseServiceConfig,
 } from "./cloud/serviceProtocol.ts";
 
 it("accepts only exact semantic versions", () => {
@@ -28,6 +35,14 @@ it("orders exact semantic versions without treating build metadata as precedence
   assert.equal(compareExactServiceVersions("2.0.0-alpha-beta", "2.0.0-alpha-alpha"), 1);
   assert.equal(compareExactServiceVersions("2.0.0", "2.0.0-rc.1"), 1);
   assert.equal(compareExactServiceVersions("2.0.0+one", "2.0.0+two"), 0);
+});
+
+it("accepts only supported service port configuration", () => {
+  assert.deepEqual(decodeServiceConfig({ port: 3773 }), { port: 3773 });
+  assert.deepEqual(parseServiceConfig('{"port":4773}'), { port: 4773 });
+  for (const value of [{}, { port: 0 }, { port: 65_536 }, { port: 1.5 }, { port: "3773" }]) {
+    assert.isUndefined(decodeServiceConfig(value));
+  }
 });
 
 it("rejects contradictory service state", () => {
@@ -75,6 +90,40 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     }),
   );
 
+  it.effect("reads the configured service port as server arguments", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pulse-service-config-test-" });
+      yield* fs.writeFileString(path.join(root, "service.json"), '{"port":4773}\n');
+
+      assert.deepEqual(yield* Effect.promise(() => readServiceArgs(root)), [
+        "serve",
+        "--port",
+        "4773",
+      ]);
+    }),
+  );
+
+  it.effect("rejects invalid service configuration before starting a child", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pulse-service-config-test-" });
+      yield* fs.writeFileString(path.join(root, "service.json"), '{"port":0}\n');
+
+      yield* Effect.promise(() =>
+        readServiceArgs(root).then(
+          () => Promise.reject(new Error("invalid config unexpectedly accepted")),
+          (error: unknown) => {
+            assert.match(String(error), /configuration is invalid/);
+            return Promise.resolve();
+          },
+        ),
+      );
+    }),
+  );
+
   it.effect("serializes shutdown with launcher recovery", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -82,7 +131,14 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-stop-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const versionDir = path.join(root, "runtime", "versions", "1.0.0");
-      const entryPath = path.join(versionDir, "node_modules", "t3", "dist", "bin.mjs");
+      const entryPath = path.join(
+        versionDir,
+        "node_modules",
+        "@sats-lab",
+        "pulse",
+        "dist",
+        "bin.mjs",
+      );
       yield* fs.makeDirectory(path.dirname(entryPath), { recursive: true });
       yield* fs.writeFileString(entryPath, "setInterval(() => {}, 1_000);\n");
       yield* fs.writeFileString(path.join(versionDir, ".install-complete"), "1.0.0\n");
@@ -122,7 +178,14 @@ if (context.update?.status === "pending") {
 `;
       for (const version of ["1.0.0", "1.1.0"]) {
         const versionDir = path.join(root, "runtime", "versions", version);
-        const entryPath = path.join(versionDir, "node_modules", "t3", "dist", "bin.mjs");
+        const entryPath = path.join(
+          versionDir,
+          "node_modules",
+          "@sats-lab",
+          "pulse",
+          "dist",
+          "bin.mjs",
+        );
         yield* fs.makeDirectory(path.dirname(entryPath), { recursive: true });
         yield* fs.writeFileString(entryPath, childSource);
         yield* fs.writeFileString(path.join(versionDir, ".install-complete"), `${version}\n`);
@@ -167,7 +230,14 @@ if (context.update?.status === "pending") {
 `;
       for (const version of ["1.0.0", "1.1.0"]) {
         const versionDir = path.join(root, "runtime", "versions", version);
-        const entryPath = path.join(versionDir, "node_modules", "t3", "dist", "bin.mjs");
+        const entryPath = path.join(
+          versionDir,
+          "node_modules",
+          "@sats-lab",
+          "pulse",
+          "dist",
+          "bin.mjs",
+        );
         yield* fs.makeDirectory(path.dirname(entryPath), { recursive: true });
         yield* fs.writeFileString(entryPath, childSource);
         yield* fs.writeFileString(path.join(versionDir, ".install-complete"), `${version}\n`);

@@ -4,6 +4,12 @@ export const SERVICE_LAUNCHER_PROTOCOL = 1 as const;
 export const SERVICE_LAUNCHER_CONTEXT_ENV = "T3_SERVICE_LAUNCHER_CONTEXT";
 export const SERVICE_LAUNCHER_FILE = "service-launcher.mjs";
 export const SERVICE_STATE_FILE = "service-state.json";
+export const SERVICE_CONFIG_FILE = "service.json";
+export const DEFAULT_SERVICE_PORT = 3773;
+
+export interface ServiceConfig {
+  readonly port: number;
+}
 
 export interface PendingServiceUpdate {
   readonly id: string;
@@ -63,6 +69,27 @@ export const isExactServiceVersion = (version: string): boolean =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function decodeServiceConfig(value: unknown): ServiceConfig | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isInteger(value.port) ||
+    typeof value.port !== "number" ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
+    return undefined;
+  }
+  return { port: value.port };
+}
+
+export function parseServiceConfig(value: string): ServiceConfig | undefined {
+  try {
+    return decodeServiceConfig(JSON.parse(value) as unknown);
+  } catch {
+    return undefined;
+  }
+}
 
 export function decodeServiceUpdate(value: unknown): ServiceUpdateRecord | undefined {
   if (!isRecord(value)) return undefined;

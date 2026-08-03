@@ -40,7 +40,7 @@ it.layer(NodeServices.layer)("service update preflight", (it) => {
       });
       expect(blocked.status).toBe("blocked");
       if (blocked.status === "blocked") {
-        expect(blocked.reason).toContain("npx t3@1.2.3 service update");
+        expect(blocked.reason).toContain("npx @sats-lab/pulse@1.2.3 service update");
       }
     }),
   );
