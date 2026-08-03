@@ -11,7 +11,7 @@ export class HttpResponseCompression extends Context.Service<
       options: HttpServerResponse.Options,
     ) => HttpServerResponse.HttpServerResponse;
   }
->()("t3/httpCompression/HttpResponseCompression") {}
+>()("@sats-lab/pulse/httpCompression/HttpResponseCompression") {}
 
 export const layerNode = Layer.effect(
   HttpResponseCompression,

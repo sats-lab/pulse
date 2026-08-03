@@ -14,6 +14,7 @@ import {
   AuthAccessOperationError,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
   type DiscoveredLocalServerList,
