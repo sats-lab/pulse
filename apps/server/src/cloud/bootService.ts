@@ -372,31 +372,46 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           statePath,
           // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned document.
           `${JSON.stringify(
-            { protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: input.cliVersion } satisfies ServiceState,
+            {
+              protocol: SERVICE_LAUNCHER_PROTOCOL,
+              activeVersion: input.cliVersion,
+            } satisfies ServiceState,
             null,
             2,
           )}\n`,
         );
         yield* writeDurably(unitPath, renderBootServiceUnit(plan));
         yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
-        yield* runStep("enabling the service", "systemctl", ["--user", "enable", BOOT_SERVICE_UNIT_FILE]);
+        yield* runStep("enabling the service", "systemctl", [
+          "--user",
+          "enable",
+          BOOT_SERVICE_UNIT_FILE,
+        ]);
         yield* runStep("enabling lingering for this user", "loginctl", ["enable-linger"]);
-        yield* runStep("starting the service", "systemctl", ["--user", "restart", BOOT_SERVICE_UNIT_FILE]);
+        yield* runStep("starting the service", "systemctl", [
+          "--user",
+          "restart",
+          BOOT_SERVICE_UNIT_FILE,
+        ]);
         if (legacyInstalled) {
-          yield* fs.remove(legacyUnitPath).pipe(
-            Effect.mapError((cause) => new BootServiceInstallError({ cause })),
-          );
+          yield* fs
+            .remove(legacyUnitPath)
+            .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
           yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
         }
       }).pipe(
         Effect.tapError(() =>
           installed
             ? runStep("restarting the service after a failed update", "systemctl", [
-                "--user", "restart", BOOT_SERVICE_UNIT_FILE,
+                "--user",
+                "restart",
+                BOOT_SERVICE_UNIT_FILE,
               ]).pipe(Effect.ignore)
             : legacyInstalled
               ? runStep("restarting the legacy service after a failed migration", "systemctl", [
-                  "--user", "restart", LEGACY_BOOT_SERVICE_UNIT_FILE,
+                  "--user",
+                  "restart",
+                  LEGACY_BOOT_SERVICE_UNIT_FILE,
                 ]).pipe(Effect.ignore)
               : Effect.void,
         ),

@@ -249,11 +249,13 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       yield* fs.writeFileString(statePath, pendingState);
       commands.length = 0;
 
-      expect((yield* service.install().pipe(Effect.flip))._tag).toBe("BootServiceUpdatePendingError");
+      expect((yield* service.install().pipe(Effect.flip))._tag).toBe(
+        "BootServiceUpdatePendingError",
+      );
       expect(serviceStateHasPendingUpdate(yield* fs.readFileString(statePath))).toBe(true);
       expect(commands.filter((command) => command.startsWith("systemctl "))).toEqual([
-        "systemctl --user stop t3code.service",
-        "systemctl --user restart t3code.service",
+        "systemctl --user stop pulse.service",
+        "systemctl --user restart pulse.service",
       ]);
     }),
   );
