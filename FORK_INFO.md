@@ -4,44 +4,38 @@ This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3c
 
 The following downstream commits are maintained on top of upstream `main`:
 
-| Commit         | Title                                                                     |
-| -------------- | ------------------------------------------------------------------------- |
-| `d64f4479f6ba` | `build(pi): pin SDK and vendor reference source`                          |
-| `ebd0c8c8f11f` | `feat(pi): add SDK-backed provider runtime`                               |
-| `a361406efbfa` | `feat(providers): add project-scoped composer discovery`                  |
-| `7a92ea7f708c` | `feat(pi): add mid-turn input and queue mutation`                         |
-| `a83ac112a736` | `fix(web): fold steering messages with settled turn work`                 |
-| `ff633ecd597a` | `dev: support loopback development behind a public proxy`                 |
-| `20e325562583` | `feat(web): persist desktop sidebar state locally`                        |
-| `61eb57ef8a31` | `docs(pi): record provider integration findings`                          |
-| `ca3e4c38b9a0` | `docs(fork): index maintained downstream commits`                         |
-| `8b935e0e7cf3` | `ci(release): maintain fork-specific workflows and Pulse publishing`      |
-| `3b33805519e1` | `docs(fork): refresh downstream stack index`                              |
-| `f1b3d5e6e7c2` | `ci: declare intentionally skipped dependency builds`                     |
-| `59d5fa842214` | `chore(release): prepare v0.0.32`                                         |
-| `640ada924920` | `fix(pi): stream live context usage during turns`                         |
-| `6c8b632aa296` | `feat(web): persist Sidebar V2 Settled shelf state`                       |
-| `2a9bc4df1307` | `feat(access): manage remote environment authorization`                   |
-| `a86752a246d7` | `feat(web): select authorized-client environment`                         |
-| `bd2b77ef1a61` | `dev: expose web development servers remotely by default`                 |
-| `a513124784ee` | `build(server): pack an installable Pulse CLI locally`                    |
-| `8b7c8cc563e2` | `fix(web): restore composer outline and compact editor height`            |
-| `3af06199d8e1` | `feat(pi): expose Pulse preview automation as native tools`               |
-| `de539541ac80` | `docs(fork): index split downstream changes`                              |
-| `078d1b325c09` | `chore(release): prepare v0.0.33`                                         |
-| `9b0bd63f4729` | `ci: use GitHub-hosted runners outside macOS packaging`                   |
-| `cc24bc94fd1c` | `feat(mobile): expose Pi mid-turn controls and runtime state`             |
-| `9a3aa67c10c0` | `build(mobile): support local Personal Team iOS installs`                 |
-| `e05df862d8e3` | `fix(web): align queued input row controls`                               |
-| `6622f7e05318` | `docs(build): document local Personal Team mobile workflows`              |
-| `22664ecc2ad9` | `docs(fork): index mobile downstream changes`                             |
-| `928254da9b95` | `fix(pi): restore live queue, tool, and compaction activity presentation` |
-| `4fb7b8975726` | `docs(fork): index Pi activity presentation fix`                          |
-| `f306a2647270` | `fix(sync): adapt downstream contracts to upstream architecture`          |
-| `3fca0badc297` | `feat(service): brand Pulse unit and persist its port`                    |
-| `42d0c24bc161` | `docs(fork): index Pulse service customization`                           |
-| `7e6e28928725` | `fix(ci): stabilize checks after service branding`                        |
-| `60eead902a8e` | `feat(service): persist host and pin local runtimes`                      |
+| Commit         | Title |
+| -------------- | ----- |
+| `c1a781cb9e19` | `build(pi): pin SDK and vendor reference source` |
+| `9c4b77cc7259` | `feat(pi): add SDK-backed provider runtime` |
+| `413ab220bef0` | `feat(providers): add project-scoped composer discovery` |
+| `1d3c748b1b2f` | `feat(pi): add mid-turn input and queue mutation` |
+| `73752bae400c` | `fix(web): fold steering messages with settled turn work` |
+| `064b4bcab0c0` | `dev: support loopback development behind a public proxy` |
+| `fe5894464927` | `feat(web): persist desktop sidebar state locally` |
+| `2a967bd4ee1e` | `docs(pi): record provider integration findings` |
+| `48dd8f7403a0` | `ci(release): maintain fork-specific workflows and Pulse publishing` |
+| `176d61ebc889` | `ci: declare intentionally skipped dependency builds` |
+| `54154111c192` | `fix(pi): stream live context usage during turns` |
+| `3f6807bd9f97` | `feat(web): persist Sidebar V2 Settled shelf state` |
+| `c22885d0c628` | `feat(access): manage remote environment authorization` |
+| `12dde4852eb1` | `feat(web): select authorized-client environment` |
+| `1f598f3136db` | `dev: expose web development servers remotely by default` |
+| `0ade2c0006e5` | `build(server): pack an installable Pulse CLI locally` |
+| `df35526bdb5a` | `fix(web): restore composer outline and compact editor height` |
+| `96628e7d2d5d` | `feat(pi): expose Pulse preview automation as native tools` |
+| `d530f7838aa5` | `ci: use GitHub-hosted runners outside macOS packaging` |
+| `1bc4313370d1` | `feat(mobile): expose Pi mid-turn controls and runtime state` |
+| `6046300783c0` | `build(mobile): support local Personal Team iOS installs` |
+| `d7bd26800d93` | `fix(web): align queued input row controls` |
+| `9e345e34745a` | `docs(build): document local Personal Team mobile workflows` |
+| `d87a18c2cd8b` | `fix(pi): restore live queue, tool, and compaction activity presentation` |
+| `426ba58b30dd` | `fix(sync): adapt downstream contracts to upstream architecture` |
+| `f26accaed296` | `feat(service): brand Pulse unit and persist its port` |
+| `b87a3a1e4cd5` | `fix(ci): stabilize checks after service branding` |
+| `dc137df14f75` | `feat(service): persist host and pin local runtimes` |
+| `22834bc3db06` | `fix(sync): adapt fork contracts to latest upstream` |
+
 
 The release customization preserves upstream workflow definitions under `.github/workflows_upstream/` while activating only CI and the fork-owned release workflow. Releases intentionally omit nightly automation, relay and hosted-web deployment, Discord announcements, WSL preparation, and Windows/Linux builds. They publish macOS artifacts and the existing `@sats-lab/pulse` npm package.
 
