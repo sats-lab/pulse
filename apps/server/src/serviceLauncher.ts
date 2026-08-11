@@ -2,7 +2,7 @@
 // @effect-diagnostics globalDate:off
 // @effect-diagnostics globalTimers:off
 // This file is shipped as a standalone bundle and copied to a stable path by
-// `t3 service update`. Keep runtime imports limited to Node built-ins.
+// `pulse service update`. Keep runtime imports limited to Node built-ins.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -21,7 +21,9 @@ import {
   compareExactServiceVersions,
   decodeServiceLauncherChildMessage,
   isExactServiceVersion,
+  parseServiceConfig,
   parseServiceState,
+  SERVICE_CONFIG_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
@@ -45,7 +47,7 @@ const runtimePaths = (baseDir: string, version: string) => {
   const versionDir = NodePath.join(baseDir, "runtime", "versions", version);
   return {
     versionDir,
-    entryPath: NodePath.join(versionDir, "node_modules", "t3", "dist", "bin.mjs"),
+    entryPath: NodePath.join(versionDir, "node_modules", "@sats-lab", "pulse", "dist", "bin.mjs"),
     sentinelPath: NodePath.join(versionDir, ".install-complete"),
   };
 };
@@ -172,6 +174,14 @@ export async function readServiceState(filePath: string): Promise<ServiceState> 
   return state;
 }
 
+export async function readServiceArgs(baseDir: string): Promise<ReadonlyArray<string>> {
+  const configPath = NodePath.join(baseDir, SERVICE_CONFIG_FILE);
+  const contents = await NodeFSP.readFile(configPath, "utf8");
+  const config = parseServiceConfig(contents);
+  if (config === undefined) throw new Error("Service configuration is invalid or unsupported.");
+  return ["serve", "--port", String(config.port)];
+}
+
 /** Durable same-directory replacement used for every runtime state transition. */
 export async function writeServiceState(filePath: string, state: ServiceState): Promise<void> {
   const directory = NodePath.dirname(filePath);
@@ -265,6 +275,7 @@ const stopMarkerPath = (baseDir: string) =>
 export class Launcher {
   readonly #baseDir: string;
   readonly #statePath: string;
+  readonly #serverArgs: ReadonlyArray<string>;
   #state: ServiceState;
   #child: ManagedChild | null = null;
   #timer: NodeJS.Timeout | undefined;
@@ -274,9 +285,10 @@ export class Launcher {
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
 
-  constructor(baseDir: string, state: ServiceState) {
+  constructor(baseDir: string, state: ServiceState, serverArgs: ReadonlyArray<string> = ["serve"]) {
     this.#baseDir = baseDir;
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
+    this.#serverArgs = serverArgs;
     this.#state = state;
   }
 
@@ -390,7 +402,7 @@ export class Launcher {
   async #startChild(version: string, role: ChildRole, update?: ServiceUpdateRecord): Promise<void> {
     if (this.#stopping) return;
     if (!(await runtimeExists(this.#baseDir, version))) {
-      throw new Error(`Selected t3@${version} runtime is missing or incomplete.`);
+      throw new Error(`Selected @sats-lab/pulse@${version} runtime is missing or incomplete.`);
     }
     if (this.#stopping) return;
     const paths = runtimePaths(this.#baseDir, version);
@@ -399,7 +411,7 @@ export class Launcher {
       childVersion: version,
       ...(update === undefined ? {} : { update }),
     };
-    const child = NodeChildProcess.spawn(process.execPath, [paths.entryPath, "serve"], {
+    const child = NodeChildProcess.spawn(process.execPath, [paths.entryPath, ...this.#serverArgs], {
       env: { ...process.env, [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
@@ -605,8 +617,11 @@ async function main(): Promise<void> {
     throw new Error("T3CODE_HOME is required by the T3 Code service launcher.");
   }
   const statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
-  const state = await readServiceState(statePath);
-  await new Launcher(baseDir, state).run();
+  const [state, serverArgs] = await Promise.all([
+    readServiceState(statePath),
+    readServiceArgs(baseDir),
+  ]);
+  await new Launcher(baseDir, state, serverArgs).run();
 }
 
 if (import.meta.main) {

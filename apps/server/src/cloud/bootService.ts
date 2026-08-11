@@ -17,16 +17,20 @@ import {
   PinnedRuntimeInstallError,
 } from "./pinnedRuntime.ts";
 import {
+  DEFAULT_SERVICE_PORT,
+  SERVICE_CONFIG_FILE,
   SERVICE_LAUNCHER_FILE,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
+  parseServiceConfig,
   parseServiceState,
   serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
 
-const BOOT_SERVICE_NAME = "t3code";
+const BOOT_SERVICE_NAME = "pulse";
 export const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
+export const LEGACY_BOOT_SERVICE_UNIT_FILE = "t3code.service";
 export const BOOT_SERVICE_UNIT_ENV = "T3_BOOT_SERVICE_UNIT";
 
 /** systemd expands `%` specifiers, including in unquoted append-log paths. */
@@ -54,7 +58,7 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
-    "Description=T3 Code server",
+    "Description=Pulse server",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
     "",
@@ -114,7 +118,7 @@ export class BootServiceInstallError extends Schema.TaggedErrorClass<BootService
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not set up the T3 Code background service.";
+    return "Could not set up the Pulse background service.";
   }
 }
 
@@ -137,6 +141,7 @@ export interface BootServiceStatus {
   readonly supported: boolean;
   readonly installed: boolean;
   readonly current: boolean;
+  readonly port: number | undefined;
   readonly unitPath: string;
   readonly logPath: string;
 }
@@ -144,7 +149,9 @@ export interface BootServiceStatus {
 export class BootService extends Context.Service<
   BootService,
   {
-    readonly install: Effect.Effect<BootServicePlan, BootServiceError>;
+    readonly install: (options?: {
+      readonly port?: number;
+    }) => Effect.Effect<BootServicePlan, BootServiceError>;
     readonly uninstall: Effect.Effect<boolean, BootServiceError>;
     readonly status: Effect.Effect<BootServiceStatus, BootServiceError>;
   }
@@ -171,9 +178,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const unitDir = path.join(homeDir, ".config", "systemd", "user");
   const unitPath = path.join(unitDir, BOOT_SERVICE_UNIT_FILE);
+  const legacyUnitPath = path.join(unitDir, LEGACY_BOOT_SERVICE_UNIT_FILE);
   const logPath = path.join(input.logsDir, "boot-service.log");
   const launcherPath = path.join(input.baseDir, "runtime", SERVICE_LAUNCHER_FILE);
   const statePath = path.join(input.baseDir, "runtime", SERVICE_STATE_FILE);
+  const configPath = path.join(input.baseDir, SERVICE_CONFIG_FILE);
   const runtimePaths = pinnedRuntimePaths(path, input.baseDir, input.cliVersion);
   const launcherSourcePath =
     host.launcherSourcePath ??
@@ -235,179 +244,241 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     );
   });
 
-  const install: BootService["Service"]["install"] = Effect.gen(function* () {
-    yield* requireSystemdLinux;
-    yield* fs
-      .makeDirectory(input.logsDir, { recursive: true })
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-
-    // Prepare every immutable artifact before stopping the installed unit.
-    yield* ensurePinnedRuntimeInstalled({
-      baseDir: input.baseDir,
-      version: input.cliVersion,
-      fs,
-      path,
-      runner,
-      validate: (runtime) =>
-        runner
-          .run({
-            command: host.execPath,
-            args: [runtime.entryPath, "--version"],
-            timeout: Duration.seconds(30),
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new PinnedRuntimeInstallError({
-                  step: "verifying the pinned t3 runtime",
-                  cause,
-                }),
-            ),
-            Effect.flatMap((result) => {
-              const reportedVersion = /\bv(\S+)\s*$/.exec(result.stdout)?.[1];
-              return result.code === 0 && reportedVersion === input.cliVersion
-                ? Effect.void
-                : Effect.fail(
-                    new PinnedRuntimeInstallError({
-                      step: "verifying the pinned t3 runtime",
-                      exitCode: Number(result.code),
-                      stdoutLength: result.stdout.length,
-                      stderrLength: result.stderr.length,
-                    }),
-                  );
-            }),
-          ),
-    }).pipe(
-      Effect.mapError((error) =>
-        error._tag === "PinnedRuntimeInstallError"
-          ? new BootServiceCommandError({
-              step: error.step,
-              exitCode: error.exitCode,
-              stdoutLength: error.stdoutLength,
-              stderrLength: error.stderrLength,
-              cause: error,
-            })
-          : new BootServiceInstallError({ cause: error }),
-      ),
-    );
-    const launcherSource = yield* fs
-      .readFileString(launcherSourcePath)
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-
-    const installed = yield* fs
-      .exists(unitPath)
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-    if (installed) {
-      yield* runStep("stopping the installed service", "systemctl", [
-        "--user",
-        "stop",
-        BOOT_SERVICE_UNIT_FILE,
-      ]);
-    }
-
-    yield* Effect.gen(function* () {
-      if (installed) {
-        const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
-        if (
-          Option.isSome(previousStateText) &&
-          serviceStateHasPendingUpdate(previousStateText.value)
-        ) {
-          return yield* new BootServiceUpdatePendingError();
-        }
-      }
+  const install: BootService["Service"]["install"] = Effect.fn("cloud.boot_service.install")(
+    function* (options) {
+      yield* requireSystemdLinux;
       yield* fs
-        .makeDirectory(unitDir, { recursive: true })
+        .makeDirectory(input.logsDir, { recursive: true })
         .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-      yield* writeDurably(launcherPath, launcherSource);
-      yield* writeDurably(
-        statePath,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned document.
-        `${JSON.stringify(
-          {
-            protocol: SERVICE_LAUNCHER_PROTOCOL,
-            activeVersion: input.cliVersion,
-          } satisfies ServiceState,
-          null,
-          2,
-        )}\n`,
-      );
-      yield* writeDurably(unitPath, renderBootServiceUnit(plan));
 
-      yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
-      yield* runStep("enabling the service", "systemctl", [
-        "--user",
-        "enable",
-        BOOT_SERVICE_UNIT_FILE,
-      ]);
-      yield* runStep("enabling lingering for this user", "loginctl", ["enable-linger"]);
-      // Start last. No administrative state write occurs after this succeeds.
-      yield* runStep("starting the service", "systemctl", [
-        "--user",
-        "restart",
-        BOOT_SERVICE_UNIT_FILE,
-      ]);
-    }).pipe(
-      Effect.tapError(() =>
-        installed
-          ? runStep("restarting the service after a failed update", "systemctl", [
-              "--user",
-              "restart",
-              BOOT_SERVICE_UNIT_FILE,
-            ]).pipe(Effect.ignore)
-          : Effect.void,
-      ),
-    );
-    return plan;
-  }).pipe(Effect.withSpan("cloud.boot_service.install"));
+      // Prepare every immutable artifact before stopping the installed unit.
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir: input.baseDir,
+        version: input.cliVersion,
+        fs,
+        path,
+        runner,
+        validate: (runtime) =>
+          runner
+            .run({
+              command: host.execPath,
+              args: [runtime.entryPath, "--version"],
+              timeout: Duration.seconds(30),
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new PinnedRuntimeInstallError({
+                    step: "verifying the pinned t3 runtime",
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((result) => {
+                const reportedVersion = /\bv(\S+)\s*$/.exec(result.stdout)?.[1];
+                return result.code === 0 && reportedVersion === input.cliVersion
+                  ? Effect.void
+                  : Effect.fail(
+                      new PinnedRuntimeInstallError({
+                        step: "verifying the pinned t3 runtime",
+                        exitCode: Number(result.code),
+                        stdoutLength: result.stdout.length,
+                        stderrLength: result.stderr.length,
+                      }),
+                    );
+              }),
+            ),
+      }).pipe(
+        Effect.mapError((error) =>
+          error._tag === "PinnedRuntimeInstallError"
+            ? new BootServiceCommandError({
+                step: error.step,
+                exitCode: error.exitCode,
+                stdoutLength: error.stdoutLength,
+                stderrLength: error.stderrLength,
+                cause: error,
+              })
+            : new BootServiceInstallError({ cause: error }),
+        ),
+      );
+      const launcherSource = yield* fs
+        .readFileString(launcherSourcePath)
+        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+
+      const [installed, legacyInstalled, existingConfigText] = yield* Effect.all([
+        fs.exists(unitPath),
+        fs.exists(legacyUnitPath),
+        fs.readFileString(configPath).pipe(Effect.option),
+      ]).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+      const existingConfig = Option.isSome(existingConfigText)
+        ? parseServiceConfig(existingConfigText.value)
+        : undefined;
+      const servicePort = options?.port ?? existingConfig?.port ?? DEFAULT_SERVICE_PORT;
+      if (installed) {
+        yield* runStep("stopping the installed service", "systemctl", [
+          "--user",
+          "stop",
+          BOOT_SERVICE_UNIT_FILE,
+        ]);
+      }
+      if (legacyInstalled) {
+        yield* runStep("stopping the legacy service", "systemctl", [
+          "--user",
+          "disable",
+          "--now",
+          LEGACY_BOOT_SERVICE_UNIT_FILE,
+        ]);
+      }
+
+      yield* Effect.gen(function* () {
+        if (installed) {
+          const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
+          if (
+            Option.isSome(previousStateText) &&
+            serviceStateHasPendingUpdate(previousStateText.value)
+          ) {
+            return yield* new BootServiceUpdatePendingError();
+          }
+        }
+        yield* fs
+          .makeDirectory(unitDir, { recursive: true })
+          .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+        yield* writeDurably(launcherPath, launcherSource);
+        yield* writeDurably(
+          configPath,
+          `${JSON.stringify({ port: servicePort }, null, 2)}\n`,
+        );
+        yield* writeDurably(
+          statePath,
+          `${JSON.stringify(
+            { protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: input.cliVersion } satisfies ServiceState,
+            null,
+            2,
+          )}\n`,
+        );
+        yield* writeDurably(unitPath, renderBootServiceUnit(plan));
+        yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
+        yield* runStep("enabling the service", "systemctl", ["--user", "enable", BOOT_SERVICE_UNIT_FILE]);
+        yield* runStep("enabling lingering for this user", "loginctl", ["enable-linger"]);
+        yield* runStep("starting the service", "systemctl", ["--user", "restart", BOOT_SERVICE_UNIT_FILE]);
+        if (legacyInstalled) {
+          yield* fs.remove(legacyUnitPath).pipe(
+            Effect.mapError((cause) => new BootServiceInstallError({ cause })),
+          );
+          yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
+        }
+      }).pipe(
+        Effect.tapError(() =>
+          installed
+            ? runStep("restarting the service after a failed update", "systemctl", [
+                "--user", "restart", BOOT_SERVICE_UNIT_FILE,
+              ]).pipe(Effect.ignore)
+            : legacyInstalled
+              ? runStep("restarting the legacy service after a failed migration", "systemctl", [
+                  "--user", "restart", LEGACY_BOOT_SERVICE_UNIT_FILE,
+                ]).pipe(Effect.ignore)
+              : Effect.void,
+        ),
+      );
+      );
+      return plan;
+    },
+  );
 
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
     yield* requireSystemdLinux;
-    if (
-      !(yield* fs
-        .exists(unitPath)
-        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause }))))
-    )
-      return false;
-    yield* runStep("stopping the service", "systemctl", [
-      "--user",
-      "disable",
-      "--now",
-      BOOT_SERVICE_UNIT_FILE,
-    ]);
-    yield* fs
-      .remove(unitPath)
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    const [installed, legacyInstalled] = yield* Effect.all([
+      fs.exists(unitPath),
+      fs.exists(legacyUnitPath),
+    ]).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    if (!installed && !legacyInstalled) return false;
+    if (installed) {
+      yield* runStep("stopping the service", "systemctl", [
+        "--user",
+        "disable",
+        "--now",
+        BOOT_SERVICE_UNIT_FILE,
+      ]);
+      yield* fs
+        .remove(unitPath)
+        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    }
+    if (legacyInstalled) {
+      yield* runStep("stopping the legacy service", "systemctl", [
+        "--user",
+        "disable",
+        "--now",
+        LEGACY_BOOT_SERVICE_UNIT_FILE,
+      ]);
+      yield* fs
+        .remove(legacyUnitPath)
+        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    }
     yield* runStep("reloading systemd user units", "systemctl", ["--user", "daemon-reload"]);
     return true;
   }).pipe(Effect.withSpan("cloud.boot_service.uninstall"));
 
   const status: BootService["Service"]["status"] = Effect.gen(function* () {
     if (platform !== "linux" || homeDir === "") {
-      return { supported: false, installed: false, current: false, unitPath, logPath };
+      return {
+        supported: false,
+        installed: false,
+        current: false,
+        port: undefined,
+        unitPath,
+        logPath,
+      };
     }
-    if (!(yield* fs.exists(unitPath))) {
-      return { supported: true, installed: false, current: false, unitPath, logPath };
+    const [installed, legacyInstalled] = yield* Effect.all([
+      fs.exists(unitPath),
+      fs.exists(legacyUnitPath),
+    ]);
+    if (!installed && !legacyInstalled) {
+      return {
+        supported: true,
+        installed: false,
+        current: false,
+        port: undefined,
+        unitPath,
+        logPath,
+      };
     }
-    const [unit, launcherExists, runtimeEntryExists, runtimeSentinel, stateText] =
+    if (!installed) {
+      return {
+        supported: true,
+        installed: true,
+        current: false,
+        port: undefined,
+        unitPath,
+        logPath,
+      };
+    }
+    const [unit, launcherExists, runtimeEntryExists, runtimeSentinel, stateText, configText] =
       yield* Effect.all([
         fs.readFileString(unitPath),
         fs.exists(launcherPath),
         fs.exists(runtimePaths.entryPath),
         fs.readFileString(runtimePaths.sentinelPath).pipe(Effect.option),
         fs.readFileString(statePath).pipe(Effect.option),
+        fs.readFileString(configPath).pipe(Effect.option),
       ]);
     const state = Option.isSome(stateText) ? parseServiceState(stateText.value) : undefined;
+    const serviceConfig = Option.isSome(configText)
+      ? parseServiceConfig(configText.value)
+      : undefined;
     return {
       supported: true,
       installed: true,
       current:
+        !legacyInstalled &&
         unit === renderBootServiceUnit(plan) &&
         launcherExists &&
         runtimeEntryExists &&
         Option.isSome(runtimeSentinel) &&
         runtimeSentinel.value.trim() === input.cliVersion &&
         state?.activeVersion === input.cliVersion &&
-        state?.update?.status !== "pending",
+        state?.update?.status !== "pending" &&
+        serviceConfig !== undefined,
+      port: serviceConfig?.port,
       unitPath,
       logPath,
     };

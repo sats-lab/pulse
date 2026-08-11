@@ -13,6 +13,19 @@ export type ServicePreflightResult =
       readonly reason: string;
     };
 
+const localUpdateReason = (version: string) =>
+  `This version includes a database update and cannot be installed remotely. Run \`npx @sats-lab/pulse@${version} service update\` on the server machine.`;
+
+const isMigrationRow = (
+  value: unknown,
+): value is { readonly migration_id: number; readonly name: string } =>
+  typeof value === "object" &&
+  value !== null &&
+  "migration_id" in value &&
+  typeof value.migration_id === "number" &&
+  "name" in value &&
+  typeof value.name === "string";
+
 export function runServicePreflight(input: {
   /** Older servers always pass this flag when invoking a staged preflight. */
   readonly databasePath: string;
@@ -25,7 +38,7 @@ export function runServicePreflight(input: {
       status: "blocked",
       version,
       reason:
-        "This release requires a newer T3 Code service launcher. Update it on the server machine.",
+        "This release requires a newer Pulse service launcher. Update it on the server machine.",
     };
   }
 
