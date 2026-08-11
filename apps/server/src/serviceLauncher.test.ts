@@ -39,10 +39,25 @@ it("orders exact semantic versions without treating build metadata as precedence
   assert.equal(compareExactServiceVersions("2.0.0+one", "2.0.0+two"), 0);
 });
 
-it("accepts only supported service port configuration", () => {
-  assert.deepEqual(decodeServiceConfig({ port: 3773 }), { port: 3773 });
-  assert.deepEqual(parseServiceConfig('{"port":4773}'), { port: 4773 });
-  for (const value of [{}, { port: 0 }, { port: 65_536 }, { port: 1.5 }, { port: "3773" }]) {
+it("accepts only supported service host and port configuration", () => {
+  assert.deepEqual(decodeServiceConfig({ host: "0.0.0.0", port: 3773 }), {
+    host: "0.0.0.0",
+    port: 3773,
+  });
+  assert.deepEqual(parseServiceConfig('{"host":"100.64.0.1","port":4773}'), {
+    host: "100.64.0.1",
+    port: 4773,
+  });
+  for (const value of [
+    {},
+    { host: "", port: 3773 },
+    { host: "  ", port: 3773 },
+    { host: 123, port: 3773 },
+    { host: "0.0.0.0", port: 0 },
+    { host: "0.0.0.0", port: 65_536 },
+    { host: "0.0.0.0", port: 1.5 },
+    { host: "0.0.0.0", port: "3773" },
+  ]) {
     assert.isUndefined(decodeServiceConfig(value));
   }
 });
@@ -107,15 +122,20 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     }),
   );
 
-  it.effect("reads the configured service port as server arguments", () =>
+  it.effect("reads the configured service host and port as server arguments", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "pulse-service-config-test-" });
-      yield* fs.writeFileString(path.join(root, "service.json"), '{"port":4773}\n');
+      yield* fs.writeFileString(
+        path.join(root, "service.json"),
+        '{"host":"100.64.0.1","port":4773}\n',
+      );
 
       assert.deepEqual(yield* Effect.promise(() => readServiceArgs(root)), [
         "serve",
+        "--host",
+        "100.64.0.1",
         "--port",
         "4773",
       ]);

@@ -215,6 +215,17 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("exposes host and port options for service installation", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(
+        runCli(["service", "install", "--help"], noConnectCli),
+      );
+
+      assert.include(output, "--host string");
+      assert.include(output, "--port integer");
+    }),
+  );
+
   it.effect("reports fresh headless connect state without requiring local configuration", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(

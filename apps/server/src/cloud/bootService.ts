@@ -1,4 +1,8 @@
-import { HostProcessExecutablePath, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessArguments,
+  HostProcessExecutablePath,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -17,6 +21,7 @@ import {
   PinnedRuntimeInstallError,
 } from "./pinnedRuntime.ts";
 import {
+  DEFAULT_SERVICE_HOST,
   DEFAULT_SERVICE_PORT,
   SERVICE_CONFIG_FILE,
   SERVICE_LAUNCHER_FILE,
@@ -141,6 +146,7 @@ export interface BootServiceStatus {
   readonly supported: boolean;
   readonly installed: boolean;
   readonly current: boolean;
+  readonly host: string | undefined;
   readonly port: number | undefined;
   readonly unitPath: string;
   readonly logPath: string;
@@ -150,6 +156,7 @@ export class BootService extends Context.Service<
   BootService,
   {
     readonly install: (options?: {
+      readonly host?: string;
       readonly port?: number;
     }) => Effect.Effect<BootServicePlan, BootServiceError>;
     readonly uninstall: Effect.Effect<boolean, BootServiceError>;
@@ -159,6 +166,7 @@ export class BootService extends Context.Service<
 
 export interface BootServiceHost {
   readonly execPath: string;
+  readonly localPackagePath?: string;
   readonly launcherSourcePath?: string;
 }
 
@@ -169,12 +177,22 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   readonly host?: BootServiceHost;
 }) {
   const hostExecPath = yield* HostProcessExecutablePath;
+  const hostProcessArguments = yield* HostProcessArguments;
   const platform = yield* HostProcessPlatform;
   const homeDir = yield* Config.string("HOME").pipe(Config.withDefault(""));
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
   const host = input.host ?? { execPath: hostExecPath };
+  const invokedEntryPath = hostProcessArguments[1];
+  const localPackagePath =
+    host.localPackagePath ??
+    (invokedEntryPath === undefined
+      ? undefined
+      : yield* fs.realPath(invokedEntryPath).pipe(
+          Effect.map((entryPath) => path.dirname(path.dirname(entryPath))),
+          Effect.orElseSucceed(() => undefined),
+        ));
 
   const unitDir = path.join(homeDir, ".config", "systemd", "user");
   const unitPath = path.join(unitDir, BOOT_SERVICE_UNIT_FILE);
@@ -255,6 +273,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       yield* ensurePinnedRuntimeInstalled({
         baseDir: input.baseDir,
         version: input.cliVersion,
+        ...(localPackagePath === undefined ? {} : { localPackagePath }),
         fs,
         path,
         runner,
@@ -312,6 +331,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       const existingConfig = Option.isSome(existingConfigText)
         ? parseServiceConfig(existingConfigText.value)
         : undefined;
+      const serviceHost = options?.host?.trim() || existingConfig?.host || DEFAULT_SERVICE_HOST;
       const servicePort = options?.port ?? existingConfig?.port ?? DEFAULT_SERVICE_PORT;
       if (installed) {
         yield* runStep("stopping the installed service", "systemctl", [
@@ -345,7 +365,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         yield* writeDurably(launcherPath, launcherSource);
         yield* writeDurably(
           configPath,
-          `${JSON.stringify({ port: servicePort }, null, 2)}\n`,
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned document.
+          `${JSON.stringify({ host: serviceHost, port: servicePort }, null, 2)}\n`,
         );
         yield* writeDurably(
           statePath,
@@ -423,6 +444,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         supported: false,
         installed: false,
         current: false,
+        host: undefined,
         port: undefined,
         unitPath,
         logPath,
@@ -437,6 +459,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         supported: true,
         installed: false,
         current: false,
+        host: undefined,
         port: undefined,
         unitPath,
         logPath,
@@ -447,6 +470,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         supported: true,
         installed: true,
         current: false,
+        host: undefined,
         port: undefined,
         unitPath,
         logPath,
@@ -478,6 +502,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         state?.activeVersion === input.cliVersion &&
         state?.update?.status !== "pending" &&
         serviceConfig !== undefined,
+      host: serviceConfig?.host,
       port: serviceConfig?.port,
       unitPath,
       logPath,

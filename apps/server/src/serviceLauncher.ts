@@ -179,7 +179,7 @@ export async function readServiceArgs(baseDir: string): Promise<ReadonlyArray<st
   const contents = await NodeFSP.readFile(configPath, "utf8");
   const config = parseServiceConfig(contents);
   if (config === undefined) throw new Error("Service configuration is invalid or unsupported.");
-  return ["serve", "--port", String(config.port)];
+  return ["serve", "--host", config.host, "--port", String(config.port)];
 }
 
 /** Durable same-directory replacement used for every runtime state transition. */

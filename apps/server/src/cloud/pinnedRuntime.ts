@@ -84,6 +84,7 @@ export class PinnedRuntimePreflightBlockedError extends Schema.TaggedErrorClass<
 interface PinnedRuntimeInstallInput {
   readonly baseDir: string;
   readonly version: string;
+  readonly localPackagePath?: string;
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly runner: ProcessRunner.ProcessRunner["Service"];
@@ -162,33 +163,34 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 
   return yield* Effect.gen(function* () {
     const installStep = "installing the pinned Pulse runtime (this can take a few minutes)";
-    yield* runner
-      .run({
+    const installPackage = (packageSpec: string) =>
+      runner.run({
         command: "npm",
-        args: [
-          "install",
-          "--prefix",
-          stagingDir,
-          "--no-fund",
-          "--no-audit",
-          `${PUBLISHED_PACKAGE_NAME}@${input.version}`,
-        ],
+        args: ["install", "--prefix", stagingDir, "--no-fund", "--no-audit", packageSpec],
         // Native dependencies may compile from source on slower machines.
         timeout: PINNED_RUNTIME_INSTALL_TIMEOUT,
-      })
-      .pipe(
+      });
+    const localPackageTarget = input.path.dirname(input.path.dirname(stagingPaths.entryPath));
+    const installedLocally =
+      input.localPackagePath === undefined
+        ? false
+        : yield* fs.copy(input.localPackagePath, localPackageTarget).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+    if (!installedLocally) {
+      const result = yield* installPackage(`${PUBLISHED_PACKAGE_NAME}@${input.version}`).pipe(
         Effect.mapError((cause) => new PinnedRuntimeInstallError({ step: installStep, cause })),
-        Effect.filterOrFail(
-          (result) => result.code === 0,
-          (result) =>
-            new PinnedRuntimeInstallError({
-              step: installStep,
-              exitCode: Number(result.code),
-              stdoutLength: result.stdout.length,
-              stderrLength: result.stderr.length,
-            }),
-        ),
       );
+      if (result.code !== 0) {
+        return yield* new PinnedRuntimeInstallError({
+          step: installStep,
+          exitCode: Number(result.code),
+          stdoutLength: result.stdout.length,
+          stderrLength: result.stderr.length,
+        });
+      }
+    }
 
     yield* input.validate(stagingPaths);
     yield* fs

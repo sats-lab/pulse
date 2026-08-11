@@ -122,17 +122,24 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("installs, reports current state, and uninstalls", () =>
     Effect.gen(function* () {
       const { service, fs, statePath, configPath, commands } = yield* makeHarness();
-      const plan = yield* service.install({ port: 4773 });
+      const plan = yield* service.install({ host: "100.64.0.1", port: 4773 });
 
       expect(plan.unitPath).toMatch(/\/pulse\.service$/);
       // @effect-diagnostics-next-line preferSchemaOverJson:off - verifies the launcher-owned JSON file.
-      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({ port: 4773 });
+      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({
+        host: "100.64.0.1",
+        port: 4773,
+      });
       expect(parseServiceState(yield* fs.readFileString(statePath))).toEqual({
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
       });
       expect(yield* fs.readFileString(plan.launcherPath)).toBe("export {};\n");
-      expect(yield* service.status).toMatchObject({ current: true, port: 4773 });
+      expect(yield* service.status).toMatchObject({
+        current: true,
+        host: "100.64.0.1",
+        port: 4773,
+      });
       const pendingState = JSON.stringify({
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
@@ -152,14 +159,17 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
-  it.effect("keeps the configured port when updating without an explicit port", () =>
+  it.effect("keeps the configured host and port when updating without explicit values", () =>
     Effect.gen(function* () {
       const { service, fs, configPath } = yield* makeHarness();
-      yield* service.install({ port: 4773 });
+      yield* service.install({ host: "100.64.0.1", port: 4773 });
       yield* service.install();
 
       // @effect-diagnostics-next-line preferSchemaOverJson:off - verifies the launcher-owned JSON file.
-      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({ port: 4773 });
+      expect(JSON.parse(yield* fs.readFileString(configPath))).toEqual({
+        host: "100.64.0.1",
+        port: 4773,
+      });
     }),
   );
 

@@ -74,6 +74,86 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
     }),
   );
 
+  it.effect("copies the current local package before trying the registry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-local-" });
+      const localPackagePath = path.join(baseDir, "current-package");
+      yield* fs.makeDirectory(path.join(localPackagePath, "dist"), { recursive: true });
+      yield* fs.writeFileString(path.join(localPackagePath, "dist", "bin.mjs"), "export {};\n");
+      yield* fs.writeFileString(path.join(localPackagePath, "local-marker"), "copied\n");
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: () => Effect.die("registry install unexpectedly attempted"),
+      });
+
+      const installed = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "1.2.3",
+        localPackagePath,
+        fs,
+        path,
+        runner,
+        validate: () => Effect.void,
+      });
+
+      assert.equal(
+        yield* fs.readFileString(
+          path.join(path.dirname(path.dirname(installed.entryPath)), "local-marker"),
+        ),
+        "copied\n",
+      );
+    }),
+  );
+
+  it.effect("falls back to the registry when the current local package cannot be copied", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-fallback-" });
+      const packageSpecs: string[] = [];
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) =>
+          Effect.gen(function* () {
+            packageSpecs.push(input.args.at(-1) ?? "");
+            const prefixIndex = input.args.indexOf("--prefix");
+            const stagingDir = input.args[prefixIndex + 1];
+            if (stagingDir === undefined) return yield* Effect.die("missing npm --prefix");
+            const entry = path.join(
+              stagingDir,
+              "node_modules",
+              "@sats-lab",
+              "pulse",
+              "dist",
+              "bin.mjs",
+            );
+            yield* fs.makeDirectory(path.dirname(entry), { recursive: true }).pipe(Effect.orDie);
+            yield* fs.writeFileString(entry, "export {};\n").pipe(Effect.orDie);
+            return {
+              stdout: "",
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            };
+          }),
+      });
+
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "1.2.3",
+        localPackagePath: path.join(baseDir, "missing-package"),
+        fs,
+        path,
+        runner,
+        validate: () => Effect.void,
+      });
+
+      assert.deepEqual(packageSpecs, ["@sats-lab/pulse@1.2.3"]);
+    }),
+  );
+
   it.effect("removes staging and leaves no final runtime when validation fails", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

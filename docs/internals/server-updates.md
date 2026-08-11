@@ -9,10 +9,14 @@ and a running server never edits its systemd unit or durable service state.
 
 The service owns these files under `<baseDir>`:
 
-- `service.json`, persistent service configuration such as the listening port;
+- `service.json`, persistent service configuration for the listening host and port;
 - `runtime/service-launcher.mjs`, the stable process selected by systemd;
 - `runtime/service-state.json`, the launcher's durable selection state;
-- `runtime/versions/<version>`, immutable exact-version npm installs.
+- `runtime/versions/<version>`, immutable exact-version package installs.
+
+Local service setup first tries to pin the package directory that is running the command, then
+falls back to `@sats-lab/pulse@<version>` from npm. This keeps tarball-installed builds usable while
+published releases retain the registry path. Remote self-update targets remain registry-only.
 
 The launcher reads `service.json` before starting a child and is the only runtime writer of
 `service-state.json`. `pulse service install` and `pulse service update` may replace the launcher

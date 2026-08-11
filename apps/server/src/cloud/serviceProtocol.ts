@@ -8,9 +8,11 @@ export const SERVICE_STATE_FILE = "service-state.json";
 /** Written by the launcher just before an explicit stop kills its child. */
 export const SERVICE_STOP_MARKER_FILE = ".service-stopping";
 export const SERVICE_CONFIG_FILE = "service.json";
+export const DEFAULT_SERVICE_HOST = "0.0.0.0";
 export const DEFAULT_SERVICE_PORT = 3773;
 
 export interface ServiceConfig {
+  readonly host: string;
   readonly port: number;
 }
 
@@ -78,6 +80,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export function decodeServiceConfig(value: unknown): ServiceConfig | undefined {
   if (
     !isRecord(value) ||
+    (value.host !== undefined && (typeof value.host !== "string" || value.host.trim() === "")) ||
     !Number.isInteger(value.port) ||
     typeof value.port !== "number" ||
     value.port < 1 ||
@@ -85,7 +88,10 @@ export function decodeServiceConfig(value: unknown): ServiceConfig | undefined {
   ) {
     return undefined;
   }
-  return { port: value.port };
+  return {
+    host: typeof value.host === "string" ? value.host.trim() : DEFAULT_SERVICE_HOST,
+    port: value.port,
+  };
 }
 
 export function parseServiceConfig(value: string): ServiceConfig | undefined {
