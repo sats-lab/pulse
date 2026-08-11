@@ -136,6 +136,8 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
               timedOut: false,
               stdoutTruncated: false,
               stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
             };
           }),
       });

@@ -454,7 +454,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly resolved: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
   }
->()("t3/pullRequest/GitHubPullRequestCli") {}
+>()("@sats-lab/pulse/pullRequest/GitHubPullRequestCli") {}
 
 /**
  * The GraphQL API takes owner and name as separate arguments, so `owner/repo` is split here.

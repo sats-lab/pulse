@@ -140,6 +140,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         host: "100.64.0.1",
         port: 4773,
       });
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
       const pendingState = JSON.stringify({
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
@@ -233,7 +234,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("restarts without overwriting a pending remote update", () =>
     Effect.gen(function* () {
       const { service, fs, statePath, commands } = yield* makeHarness();
-      yield* service.install;
+      yield* service.install();
       // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
       const pendingState = JSON.stringify({
         protocol: SERVICE_LAUNCHER_PROTOCOL - 1,
@@ -248,7 +249,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       yield* fs.writeFileString(statePath, pendingState);
       commands.length = 0;
 
-      expect((yield* service.install.pipe(Effect.flip))._tag).toBe("BootServiceUpdatePendingError");
+      expect((yield* service.install().pipe(Effect.flip))._tag).toBe("BootServiceUpdatePendingError");
       expect(serviceStateHasPendingUpdate(yield* fs.readFileString(statePath))).toBe(true);
       expect(commands.filter((command) => command.startsWith("systemctl "))).toEqual([
         "systemctl --user stop t3code.service",
