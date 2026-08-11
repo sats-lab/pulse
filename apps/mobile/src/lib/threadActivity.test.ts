@@ -108,6 +108,81 @@ describe("buildThreadFeed", () => {
     ]);
   });
 
+  it("shows a running tool before completion and then replaces it", () => {
+    const runningThread = makeThread({
+      id: ThreadId.make("thread-running-tool"),
+      projectId: ProjectId.make("project-1"),
+      title: "Running tool",
+      latestTurn: {
+        turnId: TurnId.make("turn-running"),
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-started"),
+          kind: "tool.started",
+          tone: "tool",
+          summary: "Ran command started",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-running"),
+          payload: {
+            title: "Ran command",
+            itemType: "command_execution",
+            status: "inProgress",
+            data: { toolCallId: "tool-call-1", item: { command: "sleep 30" } },
+          },
+        }),
+      ],
+    });
+
+    expect(buildThreadFeed(runningThread)[0]).toMatchObject({
+      type: "activity-group",
+      activities: [
+        {
+          id: "tool-started",
+          summary: "Ran command",
+          detail: "sleep 30",
+          status: "neutral",
+        },
+      ],
+    });
+  });
+
+  it("replaces a running automatic compaction entry with its completion", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-compaction"),
+      projectId: ProjectId.make("project-1"),
+      title: "Compaction",
+      activities: [
+        makeActivity({
+          id: EventId.make("compaction-start"),
+          kind: "context-compaction",
+          tone: "info",
+          summary: "Automatically compacting context",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: { compactionId: "compaction-1", status: "inProgress", reason: "automatic" },
+        }),
+        makeActivity({
+          id: EventId.make("compaction-end"),
+          kind: "context-compaction",
+          tone: "info",
+          summary: "Context compacted automatically",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          payload: { compactionId: "compaction-1", status: "completed", reason: "automatic" },
+        }),
+      ],
+    });
+
+    expect(buildThreadFeed(thread)[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ id: "compaction-end", summary: "Context compacted automatically" }],
+    });
+  });
+
   it("collapses matching tool lifecycle rows like desktop", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-2"),

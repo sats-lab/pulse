@@ -209,6 +209,47 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+function contextCompactionReason(value: unknown): "automatic" | "manual" {
+  return value === "threshold" ? "automatic" : "manual";
+}
+
+function contextCompactionActivity(input: {
+  readonly event: Extract<ProviderRuntimeEvent, { type: "item.started" | "item.completed" }>;
+  readonly maybeSequence: { readonly sequence?: number };
+}): OrchestrationThreadActivity {
+  const data =
+    input.event.payload.data && typeof input.event.payload.data === "object"
+      ? (input.event.payload.data as Record<string, unknown>)
+      : undefined;
+  const reason = contextCompactionReason(data?.reason);
+  const failed = input.event.type === "item.completed" && input.event.payload.status === "failed";
+  const completed = input.event.type === "item.completed" && !failed;
+  return {
+    id: input.event.eventId,
+    createdAt: input.event.createdAt,
+    tone: failed ? "error" : "info",
+    kind: "context-compaction",
+    summary: failed
+      ? "Context compaction failed"
+      : completed
+        ? reason === "automatic"
+          ? "Context compacted automatically"
+          : "Context compacted"
+        : reason === "automatic"
+          ? "Automatically compacting context"
+          : "Compacting context",
+    payload: {
+      compactionId: String(input.event.itemId ?? input.event.eventId),
+      status: input.event.payload.status ?? (completed ? "completed" : "inProgress"),
+      reason,
+      ...(input.event.payload.detail ? { detail: truncateDetail(input.event.payload.detail) } : {}),
+      ...(data ? { data } : {}),
+    },
+    turnId: toTurnId(input.event.turnId) ?? null,
+    ...input.maybeSequence,
+  };
+}
+
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
   const trimmed = planMarkdown?.trim();
   if (!trimmed) {
@@ -758,7 +799,9 @@ export function runtimeEventToActivities(
     }
 
     case "thread.state.changed": {
-      if (event.payload.state !== "compacted") {
+      // Pi has richer start/end item lifecycle events for the same compaction;
+      // do not append a duplicate terminal work-log entry for its state marker.
+      if (event.payload.state !== "compacted" || event.provider === "pi") {
         return [];
       }
 
@@ -827,6 +870,9 @@ export function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      if (event.payload.itemType === "context_compaction") {
+        return [contextCompactionActivity({ event, maybeSequence })];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
@@ -853,6 +899,9 @@ export function runtimeEventToActivities(
     }
 
     case "item.started": {
+      if (event.payload.itemType === "context_compaction") {
+        return [contextCompactionActivity({ event, maybeSequence })];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
@@ -865,11 +914,14 @@ export function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
               ? { parentToolUseId: event.payload.parentToolUseId }
               : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
