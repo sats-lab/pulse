@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { makePiTextGeneration } from "../../textGeneration/PiTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -32,6 +33,7 @@ const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
 export type PiDriverEnv =
+  | BackgroundPolicy.BackgroundPolicy
   | Crypto.Crypto
   | FileSystem.FileSystem
   | Path.Path

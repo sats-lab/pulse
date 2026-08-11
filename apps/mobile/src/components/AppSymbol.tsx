@@ -24,7 +24,6 @@ import {
   IconChevronUp,
   IconCircleCheck,
   IconCircleXFilled,
-  IconClock,
   IconCopy,
   IconDeviceDesktop,
   IconDots,
