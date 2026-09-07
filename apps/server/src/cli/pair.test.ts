@@ -18,13 +18,18 @@ import {
   persistServerRuntimeState,
   type PersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
+import { PulseSubagentsRuntimeBridgeTestLive } from "../provider/pi/PulseSubagentsRuntimeBridge.test-support.ts";
 import {
   DevServerNotProxiableError,
   resolveDirectPairingBaseUrl,
   resolveTailscaleLocalTarget,
 } from "./pair.ts";
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+const CliRuntimeLayer = Layer.mergeAll(
+  NodeServices.layer,
+  NetService.layer,
+  PulseSubagentsRuntimeBridgeTestLive,
+);
 
 const baseState = {
   version: 1,
@@ -83,10 +88,11 @@ describe("pair tailscale local target", () => {
   });
 });
 
-const runCli = (args: ReadonlyArray<string>) => Command.runWith(cli, { version: "0.0.0" })(args);
+const runCli = (args: ReadonlyArray<string>) =>
+  Command.runWith(cli, { version: "0.0.0" })(args).pipe(Effect.provide(CliRuntimeLayer));
 
 const provideCliTestLayers = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.provide(effect, Layer.mergeAll(CliRuntimeLayer, TestConsole.layer));
+  Effect.provide(effect, TestConsole.layer);
 
 // Console output accumulates across CLI runs within a test, and each
 // Console.log call is one entry — so the latest command's output is the last

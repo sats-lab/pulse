@@ -274,6 +274,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* Queue.offer(persistence, {
         snapshotSequence,
         thread,
+        subagents: [],
         // Persist the window boundary with the window's content so a cache
         // restore can keep paging from where the loaded history ends.
         ...Option.match(currentPage, {
@@ -456,6 +457,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* Queue.offer(persistence, {
         snapshotSequence,
         thread: merged,
+        subagents: [],
         ...(snapshot.page === undefined ? {} : { page: { ...snapshot.page, snapshotSequence } }),
       });
     }

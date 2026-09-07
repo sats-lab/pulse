@@ -339,10 +339,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   // task.updated included: terminal bypassed updates (Codex children's only
   // terminal signal) must carry task identity so they collapse per child
   // instead of stacking anonymous "Task idle" rows.
-  const isTaskActivity =
-    activity.kind === "task.progress" ||
-    activity.kind === "task.completed" ||
-    activity.kind === "task.updated";
+  const isTaskActivity = activity.kind.startsWith("task.");
   const taskSummary =
     isTaskActivity && typeof payload?.summary === "string" && payload.summary.length > 0
       ? payload.summary
@@ -444,11 +441,7 @@ function collapseDerivedWorkLogEntries(
   // guarantee; mirrors web's session-logic).
   const taskRowIndex = new Map<string, number>();
   for (const entry of entries) {
-    const isTaskRow =
-      entry.taskId !== undefined &&
-      (entry.activityKind === "task.progress" ||
-        entry.activityKind === "task.completed" ||
-        entry.activityKind === "task.updated");
+    const isTaskRow = entry.taskId !== undefined && entry.activityKind.startsWith("task.");
     if (isTaskRow && entry.taskId !== undefined) {
       const existingIndex = taskRowIndex.get(entry.taskId);
       if (existingIndex !== undefined) {
@@ -611,7 +604,14 @@ function toolDetailTextLooksLikeFailure(text: string): boolean {
   );
 }
 
-function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
+function workEntryIndicatesToolFailure(entry: DerivedWorkLogEntry): boolean {
+  if (
+    entry.activityKind === "task.failed" ||
+    entry.activityKind === "task.stopped" ||
+    entry.activityKind === "task.interrupted"
+  ) {
+    return true;
+  }
   if (entry.tone === "error") {
     return true;
   }
@@ -624,7 +624,10 @@ function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
   return toolDetailTextLooksLikeFailure([entry.detail, entry.command].filter(Boolean).join("\n"));
 }
 
-function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
+function workEntryIndicatesToolSuccess(entry: DerivedWorkLogEntry): boolean {
+  if (entry.activityKind === "task.completed") {
+    return true;
+  }
   if (!workLogEntryIsToolLike(entry) || workEntryIndicatesToolFailure(entry)) {
     return false;
   }
@@ -639,7 +642,7 @@ function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
   );
 }
 
-function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
+function workEntryStatus(entry: DerivedWorkLogEntry): ThreadFeedActivity["status"] {
   if (!workLogEntryIsToolLike(entry)) {
     return null;
   }
@@ -1081,7 +1084,13 @@ function compareActivityLifecycleRank(kind: string): number {
   if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
     return 1;
   }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
+  if (
+    kind.endsWith(".completed") ||
+    kind.endsWith(".resolved") ||
+    kind.endsWith(".failed") ||
+    kind.endsWith(".stopped") ||
+    kind.endsWith(".interrupted")
+  ) {
     return 2;
   }
   return 1;

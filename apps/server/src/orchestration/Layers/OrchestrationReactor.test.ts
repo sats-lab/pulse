@@ -9,6 +9,8 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import { SubagentResultDeliveryReactor } from "../Services/SubagentResultDeliveryReactor.ts";
+import { SubagentExecutionReactor } from "../Services/SubagentExecutionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -23,7 +25,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and thread deletion reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, subagent execution, and thread deletion reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -50,6 +52,23 @@ describe("OrchestrationReactor", () => {
           Layer.succeed(CheckpointReactor, {
             start: () => {
               started.push("checkpoint-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(SubagentExecutionReactor, {
+            start: Effect.sync(() => {
+              started.push("subagent-execution-reactor");
+            }),
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(SubagentResultDeliveryReactor, {
+            start: () => {
+              started.push("subagent-result-delivery-reactor");
               return Effect.void;
             },
             drain: Effect.void,
@@ -85,6 +104,8 @@ describe("OrchestrationReactor", () => {
       "provider-command-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
+      "subagent-execution-reactor",
+      "subagent-result-delivery-reactor",
       "agent-awareness-relay",
     ]);
 

@@ -200,9 +200,12 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
           command: nextCommand,
           readModel: sequentialReadModel,
         });
-        const nextEvents = Array.isArray(decided) ? decided : [decided];
-        sequentialEvents.push(...nextEvents);
-        for (const nextEvent of nextEvents) {
+        if ("_tag" in decided) {
+          continue;
+        }
+        const events = Array.isArray(decided) ? decided : [decided];
+        sequentialEvents.push(...events);
+        for (const nextEvent of events) {
           nextSequence += 1;
           sequentialReadModel = yield* projectEvent(sequentialReadModel, {
             ...nextEvent,
@@ -211,6 +214,9 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
         }
       }
 
+      if ("_tag" in forcedResult) {
+        throw new Error("force delete unexpectedly returned an idempotent decision");
+      }
       expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
     }),
   );

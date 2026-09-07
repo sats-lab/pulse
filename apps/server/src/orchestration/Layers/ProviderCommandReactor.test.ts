@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import { OrchestrationDomainEventBusLive } from "../Services/OrchestrationDomainEventSubscription.ts";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
@@ -348,6 +349,7 @@ describe("ProviderCommandReactor", () => {
     };
 
     const orchestrationLayer = OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationDomainEventBusLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(ThreadPlanProgress.layer),

@@ -1,4 +1,28 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  SubagentCreatedPayload,
+  SubagentAttachedPayload,
+  SubagentStartedPayload,
+  SubagentProgressedPayload,
+  SubagentWaitedPayload,
+  SubagentIdledPayload,
+  SubagentStopRequestedPayload,
+  SubagentCompletedPayload,
+  SubagentFailedPayload,
+  SubagentStoppedPayload,
+  SubagentInterruptedPayload,
+  ResultDeliveryQueuedPayload,
+  ResultDeliveryAttemptedPayload,
+  ResultDeliveryDeliveredPayload,
+  ResultDeliveryRetryScheduledPayload,
+  ResultDeliveryBlockedPayload,
+  ResultDeliveryCancelledPayload,
+  type ResultDeliveryStatus,
+  ResultDeliveryAttemptId,
+  type PulseSubagent,
+  type ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -8,7 +32,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { OrchestrationProjectorDecodeError, toProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -34,6 +58,47 @@ import {
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
+
+const resultDeliveryTransitions: Readonly<
+  Record<ResultDeliveryStatus, ReadonlyArray<ResultDeliveryStatus>>
+> = {
+  queued: ["attempting", "cancelled"],
+  attempting: ["delivered", "retry-scheduled", "blocked", "cancelled"],
+  "retry-scheduled": ["attempting", "cancelled"],
+  blocked: ["attempting", "cancelled"],
+  delivered: ["delivered"],
+  cancelled: ["cancelled"],
+};
+
+const ResultDeliveryPayloads = {
+  "result-delivery.queued": ResultDeliveryQueuedPayload,
+  "result-delivery.attempted": ResultDeliveryAttemptedPayload,
+  "result-delivery.delivered": ResultDeliveryDeliveredPayload,
+  "result-delivery.retry-scheduled": ResultDeliveryRetryScheduledPayload,
+  "result-delivery.blocked": ResultDeliveryBlockedPayload,
+  "result-delivery.cancelled": ResultDeliveryCancelledPayload,
+} as const;
+
+const SubagentLifecyclePayloads = {
+  "subagent.attached": SubagentAttachedPayload,
+  "subagent.started": SubagentStartedPayload,
+  "subagent.progressed": SubagentProgressedPayload,
+  "subagent.waited": SubagentWaitedPayload,
+  "subagent.idled": SubagentIdledPayload,
+  "subagent.stop-requested": SubagentStopRequestedPayload,
+  "subagent.completed": SubagentCompletedPayload,
+  "subagent.failed": SubagentFailedPayload,
+  "subagent.stopped": SubagentStoppedPayload,
+  "subagent.interrupted": SubagentInterruptedPayload,
+} as const;
+
+type SubagentLifecycleType = keyof typeof SubagentLifecyclePayloads;
+const terminalSubagentStatuses = new Set<PulseSubagent["status"]>([
+  "completed",
+  "failed",
+  "stopped",
+  "interrupted",
+]);
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -190,8 +255,83 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    subagents: [],
     updatedAt: nowIso,
   };
+}
+
+function updateResultDelivery(
+  model: OrchestrationReadModel,
+  event: OrchestrationEvent,
+  payload: { readonly deliveryId: string },
+  patch: {
+    readonly status: ResultDeliveryStatus;
+    readonly attemptId?: typeof ResultDeliveryAttemptId.Type;
+    readonly attemptedAt?: string;
+    readonly deliveredAt?: string;
+    readonly nextAttemptAt?: string;
+    readonly reason?: string;
+    readonly diagnostics?: Readonly<Record<string, string>>;
+  },
+): Effect.Effect<OrchestrationReadModel, OrchestrationProjectorDecodeError> {
+  const subagent = (model.subagents ?? []).find((entry) => entry.id === event.aggregateId);
+  const current = subagent?.resultDelivery;
+  if (subagent === undefined || current == null || current.deliveryId !== payload.deliveryId) {
+    return Effect.fail(
+      new OrchestrationProjectorDecodeError({ eventType: event.type, issue: "Unknown delivery" }),
+    );
+  }
+  if (!resultDeliveryTransitions[current.status].includes(patch.status)) {
+    return Effect.fail(
+      new OrchestrationProjectorDecodeError({
+        eventType: event.type,
+        issue: `Delivery cannot transition from ${current.status} to ${patch.status}`,
+      }),
+    );
+  }
+  if (
+    patch.attemptId !== undefined &&
+    current.attemptId !== undefined &&
+    patch.status !== "attempting" &&
+    patch.attemptId !== current.attemptId
+  ) {
+    return Effect.fail(
+      new OrchestrationProjectorDecodeError({
+        eventType: event.type,
+        issue: "Stale delivery attempt",
+      }),
+    );
+  }
+  const resultDelivery = {
+    deliveryId: current.deliveryId,
+    status: patch.status,
+    target: current.target,
+    queuedAt: current.queuedAt,
+    ...(patch.attemptId === undefined
+      ? current.attemptId === undefined
+        ? {}
+        : { attemptId: current.attemptId }
+      : { attemptId: patch.attemptId }),
+    ...(patch.attemptedAt === undefined
+      ? current.attemptedAt === undefined
+        ? {}
+        : { attemptedAt: current.attemptedAt }
+      : { attemptedAt: patch.attemptedAt }),
+    ...(patch.deliveredAt === undefined
+      ? current.deliveredAt === undefined
+        ? {}
+        : { deliveredAt: current.deliveredAt }
+      : { deliveredAt: patch.deliveredAt }),
+    ...(patch.nextAttemptAt === undefined ? {} : { nextAttemptAt: patch.nextAttemptAt }),
+    ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+    ...(patch.diagnostics === undefined ? {} : { diagnostics: patch.diagnostics }),
+  } satisfies NonNullable<PulseSubagent["resultDelivery"]>;
+  return Effect.succeed({
+    ...model,
+    subagents: model.subagents!.map((entry) =>
+      entry.id === subagent.id ? { ...entry, resultDelivery } : entry,
+    ),
+  });
 }
 
 export function projectEvent(
@@ -205,6 +345,269 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "subagent.created":
+      return decodeForEvent(SubagentCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          subagents: [
+            ...(nextBase.subagents ?? []).filter((subagent) => subagent.id !== payload.subagent.id),
+            payload.subagent,
+          ],
+        })),
+      );
+
+    case "subagent.attached":
+    case "subagent.started":
+    case "subagent.progressed":
+    case "subagent.waited":
+    case "subagent.idled":
+    case "subagent.stop-requested":
+    case "subagent.completed":
+    case "subagent.failed":
+    case "subagent.stopped":
+    case "subagent.interrupted": {
+      const lifecycleType: SubagentLifecycleType = event.type;
+      return decodeForEvent(
+        SubagentLifecyclePayloads[lifecycleType],
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          Effect.gen(function* () {
+            const subagent = (nextBase.subagents ?? []).find(
+              (entry) => entry.id === payload.subagentId,
+            );
+            if (!subagent) {
+              return yield* new OrchestrationProjectorDecodeError({
+                eventType: event.type,
+                issue: `Unknown subagent ${payload.subagentId}`,
+              });
+            }
+            if (terminalSubagentStatuses.has(subagent.status)) return nextBase;
+            if (event.type === "subagent.attached" && subagent.status !== "created") {
+              return yield* new OrchestrationProjectorDecodeError({
+                eventType: event.type,
+                issue: `Subagent ${payload.subagentId} cannot attach from ${subagent.status}`,
+              });
+            }
+            if (event.type === "subagent.started" && subagent.status !== "starting") {
+              return yield* new OrchestrationProjectorDecodeError({
+                eventType: event.type,
+                issue: `Subagent ${payload.subagentId} cannot start from ${subagent.status}`,
+              });
+            }
+            const terminal =
+              event.type === "subagent.completed" ||
+              event.type === "subagent.failed" ||
+              event.type === "subagent.stopped" ||
+              event.type === "subagent.interrupted";
+            const status = terminal
+              ? event.type === "subagent.failed"
+                ? "failed"
+                : event.type === "subagent.completed"
+                  ? "completed"
+                  : event.type === "subagent.stopped"
+                    ? "stopped"
+                    : "interrupted"
+              : event.type === "subagent.started"
+                ? "running"
+                : event.type === "subagent.waited"
+                  ? "waiting"
+                  : event.type === "subagent.idled"
+                    ? "idle"
+                    : event.type === "subagent.stop-requested"
+                      ? "stop-requested"
+                      : subagent.status;
+            const updated: PulseSubagent = {
+              ...subagent,
+              status,
+              ...(event.type === "subagent.attached"
+                ? { attachedAt: payload.occurredAt, delivery: "attached" as const }
+                : {}),
+              ...(event.type === "subagent.started"
+                ? { startedAt: payload.occurredAt, delivery: "started" as const }
+                : {}),
+              ...(event.type === "subagent.progressed"
+                ? {
+                    progress: yield* decodeForEvent(
+                      SubagentProgressedPayload,
+                      event.payload,
+                      event.type,
+                      "progress",
+                    ).pipe(Effect.map((value) => value.progress)),
+                  }
+                : {}),
+              ...(event.type === "subagent.waited" ? { waitingAt: payload.occurredAt } : {}),
+              ...(event.type === "subagent.idled" ? { idleAt: payload.occurredAt } : {}),
+              ...(event.type === "subagent.stop-requested"
+                ? { stopRequestedAt: payload.occurredAt }
+                : {}),
+              ...(terminal ? { terminalAt: payload.occurredAt } : {}),
+              ...(event.type === "subagent.completed"
+                ? { result: (payload as typeof SubagentCompletedPayload.Type).result ?? null }
+                : {}),
+              ...(event.type === "subagent.failed"
+                ? {
+                    error: yield* decodeForEvent(
+                      SubagentFailedPayload,
+                      event.payload,
+                      event.type,
+                      "error",
+                    ).pipe(Effect.map((value) => value.error)),
+                  }
+                : {}),
+            };
+            return {
+              ...nextBase,
+              subagents: (nextBase.subagents ?? []).map((entry) =>
+                entry.id === updated.id ? updated : entry,
+              ),
+            };
+          }),
+        ),
+      );
+    }
+
+    case "result-delivery.queued": {
+      return decodeForEvent(ResultDeliveryQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.flatMap((payload) => {
+          const subagent = (nextBase.subagents ?? []).find(
+            (entry) => entry.id === event.aggregateId,
+          );
+          if (!subagent)
+            return Effect.fail(
+              new OrchestrationProjectorDecodeError({
+                eventType: event.type,
+                issue: "Unknown subagent",
+              }),
+            );
+          if (payload.subagentId !== subagent.id)
+            return Effect.fail(
+              new OrchestrationProjectorDecodeError({
+                eventType: event.type,
+                issue: "Mismatched subagent",
+              }),
+            );
+          return Effect.succeed({
+            ...nextBase,
+            subagents: nextBase.subagents!.map((entry) =>
+              entry.id === subagent.id
+                ? {
+                    ...entry,
+                    resultDelivery: {
+                      deliveryId: payload.deliveryId,
+                      status: "queued" as const,
+                      target: payload.target,
+                      queuedAt: payload.queuedAt,
+                    },
+                  }
+                : entry,
+            ),
+          });
+        }),
+      );
+    }
+    case "result-delivery.attempted": {
+      return decodeForEvent(
+        ResultDeliveryAttemptedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          updateResultDelivery(nextBase, event, payload, {
+            status: "attempting",
+            attemptId: payload.attemptId,
+            attemptedAt: payload.attemptedAt,
+          }),
+        ),
+      );
+    }
+    case "result-delivery.delivered": {
+      return decodeForEvent(
+        ResultDeliveryDeliveredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          updateResultDelivery(nextBase, event, payload, {
+            status: "delivered",
+            attemptId: payload.attemptId,
+            deliveredAt: payload.deliveredAt,
+            ...(payload.diagnostics === undefined ? {} : { diagnostics: payload.diagnostics }),
+          }),
+        ),
+      );
+    }
+    case "result-delivery.retry-scheduled": {
+      return decodeForEvent(
+        ResultDeliveryRetryScheduledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          updateResultDelivery(nextBase, event, payload, {
+            status: "retry-scheduled",
+            attemptId: payload.attemptId,
+            nextAttemptAt: payload.nextAttemptAt,
+            reason: payload.reason,
+          }),
+        ),
+      );
+    }
+    case "result-delivery.blocked": {
+      return decodeForEvent(
+        ResultDeliveryBlockedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          updateResultDelivery(nextBase, event, payload, {
+            status: "blocked",
+            ...(payload.attemptId === undefined ? {} : { attemptId: payload.attemptId }),
+            reason: payload.reason,
+            ...(payload.diagnostics === undefined ? {} : { diagnostics: payload.diagnostics }),
+          }),
+        ),
+      );
+    }
+    case "result-delivery.cancelled": {
+      return decodeForEvent(
+        ResultDeliveryCancelledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.flatMap((payload) =>
+          updateResultDelivery(nextBase, event, payload, {
+            status: "cancelled",
+            ...(payload.reason === undefined ? {} : { reason: payload.reason }),
+          }),
+        ),
+      );
+    }
+    /* legacy implementation removed */
+    /* const payloadSchema = ResultDeliveryPayloads[event.type];
+      return decodeForEvent(payloadSchema, event.payload, event.type, "payload").pipe(
+        Effect.flatMap((payload) => {
+          const subagentId = "subagentId" in payload ? payload.subagentId : undefined;
+          const subagent = (nextBase.subagents ?? []).find((entry) => entry.id === subagentId);
+          if (!subagent) return Effect.fail(new OrchestrationProjectorDecodeError({ eventType: event.type, issue: "Unknown subagent" }));
+          const current = subagent.resultDelivery;
+          if (event.type === "result-delivery.queued") {
+            return Effect.succeed({ ...nextBase, subagents: nextBase.subagents!.map((entry) => entry.id === subagent.id ? { ...entry, resultDelivery: { deliveryId: payload.deliveryId, status: "queued" as const, target: payload.target, queuedAt: payload.queuedAt } } : entry) });
+          }
+          if (!current || current.deliveryId !== payload.deliveryId) return Effect.fail(new OrchestrationProjectorDecodeError({ eventType: event.type, issue: "Unknown delivery" }));
+          const patch = event.type === "result-delivery.attempted" ? { status: "attempting" as const, attemptId: payload.attemptId, attemptedAt: payload.attemptedAt } : event.type === "result-delivery.delivered" ? { status: "delivered" as const, attemptId: payload.attemptId, deliveredAt: payload.deliveredAt, ...(payload.diagnostics === undefined ? {} : { diagnostics: payload.diagnostics }) } : event.type === "result-delivery.retry-scheduled" ? { status: "retry-scheduled" as const, attemptId: payload.attemptId, nextAttemptAt: payload.nextAttemptAt, reason: payload.reason } : event.type === "result-delivery.blocked" ? { status: "blocked" as const, ...(payload.attemptId === undefined ? {} : { attemptId: payload.attemptId }), reason: payload.reason, ...(payload.diagnostics === undefined ? {} : { diagnostics: payload.diagnostics }) } : { status: "cancelled" as const, reason: payload.reason };
+          return Effect.succeed({ ...nextBase, subagents: nextBase.subagents!.map((entry) => entry.id === subagent.id ? { ...entry, resultDelivery: { ...current, ...patch } } : entry) });
+        }),
+      );
+    } */
+
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {

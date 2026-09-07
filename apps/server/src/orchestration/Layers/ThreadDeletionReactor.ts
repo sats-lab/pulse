@@ -13,6 +13,10 @@ import {
   type ThreadDeletionReactorShape,
 } from "../Services/ThreadDeletionReactor.ts";
 import { forkParked } from "../../serverActivation.ts";
+import { SubagentLiveRegistry } from "../Services/SubagentLiveRegistry.ts";
+import { CommandId } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
 
@@ -41,6 +45,8 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const subagentRegistry = yield* SubagentLiveRegistry;
+  const crypto = yield* Crypto.Crypto;
 
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
     logCleanupCauseUnlessInterrupted({
@@ -61,6 +67,22 @@ const make = Effect.gen(function* () {
   ) {
     const { threadId } = event.payload;
     yield* stopProviderSession(threadId);
+    for (const handle of yield* subagentRegistry.deleteParentThread(threadId)) {
+      yield* handle.driver.stop.pipe(Effect.catchCause(() => Effect.void));
+      yield* handle.driver.dispose.pipe(Effect.catchCause(() => Effect.void));
+      yield* subagentRegistry.remove(handle.subagent.id);
+      yield* orchestrationEngine
+        .dispatch({
+          type: "subagent.interrupt",
+          commandId: CommandId.make(`thread-delete:${yield* crypto.randomUUIDv4}`),
+          subagentId: handle.subagent.id,
+          createdAt: yield* DateTime.now.pipe(Effect.map(DateTime.formatIso)),
+        })
+        .pipe(
+          Effect.asVoid,
+          Effect.catchCause(() => Effect.void),
+        );
+    }
     yield* closeThreadTerminals(threadId);
   });
 

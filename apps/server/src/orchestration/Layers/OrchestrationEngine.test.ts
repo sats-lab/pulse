@@ -8,10 +8,13 @@ import {
   TurnId,
   type OrchestrationEvent,
   ProviderInstanceId,
+  SubagentId,
+  type PulseSubagent,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { OrchestrationDomainEventBusLive } from "../Services/OrchestrationDomainEventSubscription.ts";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -21,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
@@ -52,6 +56,7 @@ async function createOrchestrationSystem() {
   });
   const orchestrationLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationDomainEventBusLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
     ),
@@ -60,7 +65,7 @@ async function createOrchestrationSystem() {
     Layer.provide(ThreadBackgroundLiveness.layer),
     Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
     Layer.provide(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
@@ -69,10 +74,12 @@ async function createOrchestrationSystem() {
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
   const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+  const receipts = await runtime.runPromise(Effect.service(OrchestrationCommandReceiptRepository));
   return {
     engine,
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
+    receipts,
     dispose: () => runtime.dispose(),
   };
 }
@@ -93,6 +100,97 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("handles CREATE-only subagent commands with idempotent receipts, duplicate rejection, and aggregate routing", async () => {
+    const system = await createOrchestrationSystem();
+    const subagent: PulseSubagent = {
+      id: SubagentId.make("subagent-engine"),
+      origin: {
+        projectId: asProjectId("project-engine"),
+        threadId: ThreadId.make("thread-engine"),
+        turnId: asTurnId("turn-engine"),
+      },
+      title: "Engine subagent",
+      prompt: "Run the engine test task",
+      metadata: { providerInstanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      effort: "high",
+      status: "created",
+      delivery: "none",
+      createdAt: now(),
+    };
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-subagent-project-create"),
+        projectId: asProjectId("project-engine"),
+        title: "Subagent Project",
+        workspaceRoot: "/tmp/project-engine",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5",
+        },
+        createdAt: now(),
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-subagent-thread-create"),
+        threadId: ThreadId.make("thread-engine"),
+        projectId: asProjectId("project-engine"),
+        title: "Subagent Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now(),
+      }),
+    );
+    const command = {
+      type: "subagent.create" as const,
+      commandId: CommandId.make("cmd-subagent-engine"),
+      subagentId: subagent.id,
+      subagent,
+    };
+    const accepted = await system.run(system.engine.dispatch(command));
+    const duplicate = await system.run(system.engine.dispatch(command));
+    expect(duplicate).toEqual(accepted);
+    const events = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(Effect.map(Array.from)),
+    );
+    expect(
+      events.filter((event) => (event as OrchestrationEvent).type === "subagent.created"),
+    ).toHaveLength(1);
+    expect(
+      events.find((event) => (event as OrchestrationEvent).type === "subagent.created"),
+    ).toMatchObject({
+      aggregateKind: "subagent",
+      aggregateId: subagent.id,
+      sequence: accepted.sequence - 1,
+    });
+
+    const rejected = {
+      ...command,
+      commandId: CommandId.make("cmd-subagent-mismatch"),
+      subagentId: SubagentId.make("other"),
+    };
+    const rejection = await system.run(Effect.result(system.engine.dispatch(rejected)));
+    expect(rejection._tag).toBe("Failure");
+    const receipt = await system.run(
+      system.receipts.getByCommandId({ commandId: rejected.commandId }),
+    );
+    const receiptRows = receipt._tag === "Some" ? [receipt.value] : [];
+    expect(receiptRows[0]).toMatchObject({
+      aggregateKind: "subagent",
+      aggregateId: "other",
+      status: "rejected",
+    });
+    await system.dispose();
+  });
+
   it("bootstraps command handling from persisted projections without reading the full snapshot", async () => {
     let nextSequence = 8;
     const eventStore: OrchestrationEventStoreShape = {
@@ -174,6 +272,7 @@ describe("OrchestrationEngine", () => {
     let fullSnapshotReadCount = 0;
 
     const layer = OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationDomainEventBusLive),
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.succeed(commandReadModel),
@@ -217,7 +316,7 @@ describe("OrchestrationEngine", () => {
         } satisfies OrchestrationProjectionPipelineShape),
       ),
       Layer.provide(Layer.succeed(OrchestrationEventStore, eventStore)),
-      Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -820,12 +919,13 @@ describe("OrchestrationEngine", () => {
 
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationDomainEventBusLive),
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
         Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(OrchestrationProjectionPipelineLive),
         Layer.provide(Layer.succeed(OrchestrationEventStore, flakyStore)),
-        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
         Layer.provideMerge(ServerConfigLayer),
@@ -927,12 +1027,13 @@ describe("OrchestrationEngine", () => {
 
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationDomainEventBusLive),
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
         Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(OrchestrationEventStoreLive),
-        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
         Layer.provide(NodeServices.layer),
@@ -1072,12 +1173,13 @@ describe("OrchestrationEngine", () => {
 
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationDomainEventBusLive),
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
         Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
-        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
         Layer.provide(NodeServices.layer),

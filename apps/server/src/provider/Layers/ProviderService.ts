@@ -19,6 +19,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  ProviderDeliverSubagentResultInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderInstanceId,
@@ -49,7 +50,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderValidationError,
+  ProviderUnsupportedError,
+} from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -776,6 +781,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const deliverSubagentResult: ProviderServiceMethod<"deliverSubagentResult"> = Effect.fn(
+    "deliverSubagentResult",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.deliverSubagentResult",
+      schema: ProviderDeliverSubagentResultInput,
+      payload: rawInput,
+    });
+    const routed = yield* resolveRoutableSession({
+      threadId: input.parentThreadId,
+      operation: "ProviderService.deliverSubagentResult",
+      allowRecovery: false,
+    });
+    if (!routed.adapter.deliverSubagentResult) {
+      return yield* new ProviderUnsupportedError({ provider: routed.adapter.provider });
+    }
+    return yield* routed.adapter.deliverSubagentResult(input);
+  });
+
   const interruptTurn: ProviderServiceMethod<"interruptTurn"> = Effect.fn("interruptTurn")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1204,6 +1228,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   return {
     startSession,
     sendTurn,
+    deliverSubagentResult,
     interruptTurn,
     mutateInputQueue,
     respondToRequest,

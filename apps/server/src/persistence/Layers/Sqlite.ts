@@ -7,6 +7,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { runMigrations } from "../Migrations.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProjectionSubagentRepositoryLive } from "./ProjectionSubagents.ts";
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
@@ -47,20 +48,23 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    setup,
-    makeRuntimeSqliteLayer({
-      filename: dbPath,
-      spanAttributes: {
-        "db.name": path.basename(dbPath),
-        "service.name": "t3-server",
-      },
-    }),
+    ProjectionSubagentRepositoryLive,
+    Layer.provideMerge(
+      setup,
+      makeRuntimeSqliteLayer({
+        filename: dbPath,
+        spanAttributes: {
+          "db.name": path.basename(dbPath),
+          "service.name": "t3-server",
+        },
+      }),
+    ),
   );
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup,
-  makeRuntimeSqliteLayer({ filename: ":memory:" }),
+  ProjectionSubagentRepositoryLive,
+  Layer.provideMerge(setup, makeRuntimeSqliteLayer({ filename: ":memory:" })),
 );
 
 export const layerConfig = Layer.unwrap(

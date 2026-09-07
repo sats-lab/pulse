@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  ResultDeliveryId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -21,6 +22,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { subagentParentActivity } from "./SubagentParentActivity.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -142,18 +144,25 @@ function threadHasQueuedTurnStart(
   );
 }
 
-function withEventBase(
+type OrchestrationEventBase<K extends OrchestrationEvent["aggregateKind"]> = {
+  readonly eventId: EventId;
+  readonly aggregateKind: K;
+  readonly aggregateId: Extract<OrchestrationEvent, { aggregateKind: K }>["aggregateId"];
+  readonly occurredAt: string;
+  readonly commandId: OrchestrationEvent["commandId"];
+  readonly causationEventId: OrchestrationEvent["causationEventId"];
+  readonly correlationId: OrchestrationEvent["correlationId"];
+  readonly metadata: OrchestrationEvent["metadata"];
+};
+
+function withEventBase<K extends OrchestrationEvent["aggregateKind"]>(
   input: Pick<OrchestrationCommand, "commandId"> & {
-    readonly aggregateKind: OrchestrationEvent["aggregateKind"];
-    readonly aggregateId: OrchestrationEvent["aggregateId"];
+    readonly aggregateKind: K;
+    readonly aggregateId: OrchestrationEventBase<K>["aggregateId"];
     readonly occurredAt: string;
-    readonly metadata?: OrchestrationEvent["metadata"];
+    readonly metadata?: OrchestrationEventBase<K>["metadata"];
   },
-): Effect.Effect<
-  Omit<OrchestrationEvent, "sequence" | "type" | "payload">,
-  PlatformError.PlatformError,
-  Crypto.Crypto
-> {
+): Effect.Effect<OrchestrationEventBase<K>, PlatformError.PlatformError, Crypto.Crypto> {
   return Crypto.Crypto.pipe(
     Effect.flatMap((crypto) =>
       crypto.randomUUIDv4.pipe(
@@ -174,9 +183,111 @@ function withEventBase(
 
 type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
 
+export type IdempotentCommandDecision = {
+  readonly _tag: "IdempotentCommandDecision";
+};
+
 type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
-  | ReadonlyArray<PlannedOrchestrationEvent>;
+  | ReadonlyArray<PlannedOrchestrationEvent>
+  | IdempotentCommandDecision;
+
+type SubagentEventBase = OrchestrationEventBase<"subagent">;
+type SubagentLifecycleEvent = Omit<
+  Exclude<
+    Extract<OrchestrationEvent, { aggregateKind: "subagent" }>,
+    { type: "subagent.created" | `result-delivery.${string}` }
+  >,
+  "sequence"
+>;
+
+type SubagentLifecycleCommand = Extract<
+  OrchestrationCommand,
+  {
+    type:
+      | "subagent.attach"
+      | "subagent.start"
+      | "subagent.progress"
+      | "subagent.wait"
+      | "subagent.idle"
+      | "subagent.stop-request"
+      | "subagent.complete"
+      | "subagent.fail"
+      | "subagent.stop"
+      | "subagent.interrupt";
+  }
+>;
+
+function makeSubagentLifecycleEvent(
+  command: SubagentLifecycleCommand,
+  base: SubagentEventBase,
+  occurredAt: string,
+): SubagentLifecycleEvent {
+  switch (command.type) {
+    case "subagent.attach":
+      return {
+        ...base,
+        type: "subagent.attached",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.start":
+      return {
+        ...base,
+        type: "subagent.started",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.progress":
+      return {
+        ...base,
+        type: "subagent.progressed",
+        payload: { subagentId: command.subagentId, progress: command.progress, occurredAt },
+      };
+    case "subagent.wait":
+      return {
+        ...base,
+        type: "subagent.waited",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.idle":
+      return {
+        ...base,
+        type: "subagent.idled",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.stop-request":
+      return {
+        ...base,
+        type: "subagent.stop-requested",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.complete":
+      return {
+        ...base,
+        type: "subagent.completed",
+        payload: { subagentId: command.subagentId, result: command.result, occurredAt },
+      };
+    case "subagent.fail":
+      return {
+        ...base,
+        type: "subagent.failed",
+        payload: { subagentId: command.subagentId, error: command.error, occurredAt },
+      };
+    case "subagent.stop":
+      return {
+        ...base,
+        type: "subagent.stopped",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    case "subagent.interrupt":
+      return {
+        ...base,
+        type: "subagent.interrupted",
+        payload: { subagentId: command.subagentId, occurredAt },
+      };
+    default:
+      return command satisfies never;
+  }
+}
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
@@ -198,6 +309,9 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
       command: nextCommand,
       readModel: nextReadModel,
     });
+    if ("_tag" in decided && decided._tag === "IdempotentCommandDecision") {
+      continue;
+    }
     const nextEvents = Array.isArray(decided) ? decided : [decided];
     for (const nextEvent of nextEvents) {
       plannedEvents.push(nextEvent);
@@ -224,6 +338,286 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   Crypto.Crypto
 > {
   switch (command.type) {
+    case "subagent.create": {
+      if (command.subagentId !== command.subagent.id) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "subagentId must match subagent.id",
+        });
+      }
+      if ((readModel.subagents ?? []).some((subagent) => subagent.id === command.subagentId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "subagentId must not already exist",
+        });
+      }
+      const originThread = readModel.threads.find(
+        (thread) => thread.id === command.subagent.origin.threadId,
+      );
+      if (
+        originThread === undefined ||
+        originThread.projectId !== command.subagent.origin.projectId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "subagent origin must reference an existing thread in its project",
+        });
+      }
+      const lifecycleEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "subagent",
+          aggregateId: command.subagentId,
+          occurredAt: command.subagent.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "subagent.created" as const,
+        payload: { subagent: command.subagent },
+      };
+      const activity = subagentParentActivity(lifecycleEvent, command.subagent);
+      return [
+        lifecycleEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.subagent.origin.threadId,
+            occurredAt: command.subagent.createdAt,
+            commandId: command.commandId,
+            metadata: {},
+          })),
+          type: "thread.activity-appended" as const,
+          payload: { threadId: command.subagent.origin.threadId, activity },
+        },
+      ];
+    }
+    case "result-delivery.attempt":
+    case "result-delivery.deliver":
+    case "result-delivery.retry":
+    case "result-delivery.block":
+    case "result-delivery.cancel": {
+      const subagent = (readModel.subagents ?? []).find((entry) => entry.id === command.subagentId);
+      const delivery = subagent?.resultDelivery;
+      const parentThread =
+        subagent === undefined
+          ? undefined
+          : (readModel.threads ?? []).find((thread) => thread.id === subagent.origin.threadId);
+      if (
+        subagent === undefined ||
+        delivery == null ||
+        delivery.deliveryId !== command.deliveryId ||
+        subagent.status !== "completed" ||
+        ((parentThread === undefined || parentThread.deletedAt !== null) &&
+          command.type !== "result-delivery.cancel")
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "delivery requires the completed subagent and matching delivery",
+        });
+      if (delivery.status === "delivered" || delivery.status === "cancelled")
+        return { _tag: "IdempotentCommandDecision" };
+      const allowed: Record<string, readonly string[]> = {
+        "result-delivery.attempt": ["queued", "retry-scheduled", "blocked"],
+        "result-delivery.deliver": ["attempting"],
+        "result-delivery.retry": ["attempting"],
+        "result-delivery.block": ["attempting"],
+        "result-delivery.cancel": ["queued", "retry-scheduled", "blocked", "attempting"],
+      };
+      if (!allowed[command.type]?.includes(delivery.status))
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `delivery status ${delivery.status} does not allow ${command.type}`,
+        });
+      if (
+        command.type !== "result-delivery.attempt" &&
+        command.type !== "result-delivery.cancel" &&
+        command.attemptId !== delivery.attemptId
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "delivery attempt does not match current attempt",
+        });
+      const base = yield* withEventBase({
+        aggregateKind: "subagent",
+        aggregateId: subagent.id,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      if (command.type === "result-delivery.attempt")
+        return {
+          ...base,
+          type: "result-delivery.attempted" as const,
+          payload: {
+            deliveryId: command.deliveryId,
+            attemptId: command.attemptId,
+            attemptedAt: command.createdAt,
+          },
+        };
+      if (command.type === "result-delivery.deliver")
+        return {
+          ...base,
+          type: "result-delivery.delivered" as const,
+          payload: {
+            deliveryId: command.deliveryId,
+            attemptId: command.attemptId,
+            deliveredAt: command.createdAt,
+            ...(command.diagnostics === undefined ? {} : { diagnostics: command.diagnostics }),
+          },
+        };
+      if (command.type === "result-delivery.retry")
+        return {
+          ...base,
+          type: "result-delivery.retry-scheduled" as const,
+          payload: {
+            deliveryId: command.deliveryId,
+            attemptId: command.attemptId,
+            nextAttemptAt: command.nextAttemptAt,
+            reason: command.reason,
+          },
+        };
+      if (command.type === "result-delivery.block")
+        return {
+          ...base,
+          type: "result-delivery.blocked" as const,
+          payload: {
+            deliveryId: command.deliveryId,
+            ...(command.attemptId === undefined ? {} : { attemptId: command.attemptId }),
+            blockedAt: command.createdAt,
+            reason: command.reason,
+            ...(command.diagnostics === undefined ? {} : { diagnostics: command.diagnostics }),
+          },
+        };
+      return {
+        ...base,
+        type: "result-delivery.cancelled" as const,
+        payload: {
+          deliveryId: command.deliveryId,
+          cancelledAt: command.createdAt,
+          ...(command.reason === undefined ? {} : { reason: command.reason }),
+        },
+      };
+    }
+    case "subagent.attach":
+    case "subagent.start":
+    case "subagent.progress":
+    case "subagent.wait":
+    case "subagent.idle":
+    case "subagent.stop-request":
+    case "subagent.complete":
+    case "subagent.fail":
+    case "subagent.stop":
+    case "subagent.interrupt": {
+      const subagent = (readModel.subagents ?? []).find((entry) => entry.id === command.subagentId);
+      if (subagent === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "unknown subagent",
+        });
+      }
+      const terminal = ["completed", "failed", "stopped", "interrupted"] as const;
+      if (terminal.includes(subagent.status as (typeof terminal)[number])) {
+        return { _tag: "IdempotentCommandDecision" };
+      }
+      const allowed: Record<string, readonly string[]> = {
+        "subagent.attach": ["created"],
+        "subagent.start": ["starting"],
+        "subagent.progress": ["starting", "running", "waiting", "idle"],
+        "subagent.wait": ["starting", "running"],
+        "subagent.idle": ["starting", "running", "waiting"],
+        "subagent.stop-request": ["created", "starting", "running", "waiting", "idle"],
+        "subagent.complete": [
+          "created",
+          "starting",
+          "running",
+          "waiting",
+          "idle",
+          "stop-requested",
+        ],
+        "subagent.fail": ["created", "starting", "running", "waiting", "idle", "stop-requested"],
+        "subagent.stop": ["created", "starting", "running", "waiting", "idle", "stop-requested"],
+        "subagent.interrupt": [
+          "created",
+          "starting",
+          "running",
+          "waiting",
+          "idle",
+          "stop-requested",
+        ],
+      };
+      const allowedStatuses = allowed[command.type];
+      if (allowedStatuses === undefined || !allowedStatuses.includes(subagent.status)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `subagent status ${subagent.status} does not allow ${command.type}`,
+        });
+      }
+      const occurredAt = command.createdAt;
+      const eventBase = yield* withEventBase<"subagent">({
+        aggregateKind: "subagent",
+        aggregateId: command.subagentId,
+        occurredAt,
+        commandId: command.commandId,
+      });
+      const lifecycleEvent = makeSubagentLifecycleEvent(command, eventBase, occurredAt);
+      const updatedModel = yield* projectEvent(readModel, {
+        ...lifecycleEvent,
+        sequence: readModel.snapshotSequence + 1,
+      }).pipe(Effect.orDie);
+      const updatedSubagent = (updatedModel.subagents ?? []).find(
+        (entry) => entry.id === command.subagentId,
+      );
+      if (updatedSubagent === undefined) return lifecycleEvent;
+      const activity = subagentParentActivity(lifecycleEvent, updatedSubagent);
+      if (activity === null) return lifecycleEvent;
+      if (command.type === "subagent.complete") {
+        const deliveryId = ResultDeliveryId.make(
+          yield* Crypto.Crypto.pipe(Effect.flatMap((crypto) => crypto.randomUUIDv4)),
+        );
+        const queuedEvent = {
+          ...(yield* withEventBase({
+            aggregateKind: "subagent" as const,
+            aggregateId: updatedSubagent.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "result-delivery.queued" as const,
+          payload: {
+            deliveryId,
+            subagentId: updatedSubagent.id,
+            target: {
+              kind: "parent-thread" as const,
+              address: updatedSubagent.origin.threadId,
+            },
+            queuedAt: occurredAt,
+          },
+        };
+        return [
+          lifecycleEvent,
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: updatedSubagent.origin.threadId,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.activity-appended" as const,
+            payload: { threadId: updatedSubagent.origin.threadId, activity },
+          },
+          queuedEvent,
+        ];
+      }
+      return [
+        lifecycleEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: updatedSubagent.origin.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.activity-appended" as const,
+          payload: { threadId: updatedSubagent.origin.threadId, activity },
+        },
+      ];
+    }
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,

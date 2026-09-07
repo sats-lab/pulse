@@ -21,6 +21,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -29,7 +30,6 @@ import * as Stream from "effect/Stream";
 import {
   createAgentSession,
   createAgentSessionServices,
-  SessionManager,
   type AgentSession,
   type AgentSessionEvent,
   type CreateAgentSessionResult,
@@ -39,10 +39,8 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { makePreviewAutomationSnapshotToolView } from "../../mcp/PreviewAutomationSnapshotArtifacts.ts";
+import type { PulseSubagentsToolInput } from "./PulseSubagentsTool.ts";
 import {
-  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
@@ -57,7 +55,7 @@ import {
   type PiToolTextProjection,
   type PiToolTextProjector,
 } from "./PiToolOutputProjector.ts";
-import { makePiPulseTools, PULSE_PI_TOOL_NAMES } from "./PiPulseTools.ts";
+import { createPiSession, type PiSessionFactoryInput } from "./PiSessionFactory.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -140,6 +138,12 @@ export interface PiAdapterOptions {
   readonly createAgentSessionServices?: (
     options: Parameters<typeof createAgentSessionServices>[0],
   ) => Promise<AgentSessionServices>;
+  readonly resolvePulseSubagents?: (context: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId | undefined;
+    readonly cwd: string;
+    readonly modelSelection: PiSessionFactoryInput["modelSelection"];
+  }) => Promise<Omit<PulseSubagentsToolInput, "run" | "randomUUID">>;
 }
 
 export type PiAdapterEnv = Crypto.Crypto | FileSystem.FileSystem | Path.Path | ServerConfig;
@@ -250,6 +254,7 @@ function resolveThinkingLevel(input: {
   return typeof value === "string" ? (value as AgentSession["thinkingLevel"]) : undefined;
 }
 
+/* Legacy session cursor helpers are retained for Pi script compatibility. */
 function extractResumeSessionFile(value: unknown): string | undefined {
   if (typeof value === "string") return value.trim() || undefined;
   const record = recordFromUnknown(value);
@@ -962,7 +967,6 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
   const sessions = new Map<ThreadId, PiSessionContext>();
   const effectContext = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(effectContext);
-  const runPromise = Effect.runPromiseWith(effectContext);
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(
       (cause) =>
@@ -1182,6 +1186,80 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     return true;
   });
 
+  const deliverSubagentResult: NonNullable<
+    ProviderAdapterShape<ProviderAdapterError>["deliverSubagentResult"]
+  > = Effect.fn("PiAdapter.deliverSubagentResult")(function* (input) {
+    const initial = yield* ensureContext(input.parentThreadId);
+    return yield* initial.queueSemaphore.withPermit(
+      Effect.gen(function* () {
+        const context = yield* ensureContext(input.parentThreadId);
+        if (context !== initial || (yield* Ref.get(context.stopped))) {
+          return yield* new ProviderAdapterSessionClosedError({
+            provider: PROVIDER,
+            threadId: input.parentThreadId,
+          });
+        }
+        const marker = (message: unknown): boolean => {
+          const record = recordFromUnknown(message);
+          const details = record?.details;
+          return (
+            record?.role === "custom" &&
+            record.customType === "pulse.subagent.result" &&
+            recordFromUnknown(details)?.deliveryId === input.deliveryId
+          );
+        };
+        if (
+          context.piSession.messages.some(marker) ||
+          context.piSession.sessionManager.getEntries().some(marker)
+        ) {
+          return {
+            provider: PROVIDER,
+            providerInstanceId: options.instanceId,
+            piSessionId: context.piSession.sessionId,
+            accepted: true,
+            alreadyPresent: true,
+            acceptedAt: yield* nowIso,
+          };
+        }
+        const boundedResult = (input.result ?? "").slice(0, 12000);
+        const envelope = `Pulse subagent result (schemaVersion=1)\nSubagent: ${input.subagentId}\nOrigin turn: ${input.originTurnId}\nTitle: ${input.title}\nResult:\n${boundedResult}`;
+        const streaming = context.piSession.isStreaming;
+        yield* Effect.tryPromise({
+          try: () =>
+            context.piSession.sendCustomMessage(
+              {
+                customType: "pulse.subagent.result",
+                content: [{ type: "text", text: envelope }],
+                display: false,
+                details: {
+                  deliveryId: input.deliveryId,
+                  subagentId: input.subagentId,
+                  originTurnId: input.originTurnId,
+                  schemaVersion: 1,
+                },
+              },
+              streaming ? { deliverAs: "followUp" } : { triggerTurn: true },
+            ),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "sendCustomMessage",
+              detail: errorDetail(cause),
+              cause,
+            }),
+        });
+        return {
+          provider: PROVIDER,
+          providerInstanceId: options.instanceId,
+          piSessionId: context.piSession.sessionId,
+          accepted: true,
+          alreadyPresent: false,
+          acceptedAt: yield* nowIso,
+        };
+      }),
+    );
+  });
+
   const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = Effect.fn(
     "PiAdapter.startSession",
   )(function* (input) {
@@ -1206,109 +1284,52 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     }
 
     const cwd = input.cwd ?? serverConfig.cwd;
-    const model = yield* Effect.tryPromise({
-      try: () =>
-        resolvePiModel(options.modelRuntime, input.modelSelection?.model, options.environment),
-      catch: (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "model/resolve",
-          detail: errorDetail(cause),
-          cause,
-        }),
-    });
-    if (!model) {
-      return yield* new ProviderAdapterValidationError({
-        provider: PROVIDER,
-        operation: "startSession",
-        issue: input.modelSelection?.model
-          ? `Pi model '${input.modelSelection.model}' is unavailable or missing authentication.`
-          : "No Pi model with configured authentication is available.",
-      });
-    }
-
-    const sessionFile = extractResumeSessionFile(input.resumeCursor);
-    const sessionManager = sessionFile
-      ? yield* Effect.try({
-          try: () => SessionManager.open(sessionFile, undefined, cwd),
-          catch: (cause) =>
-            new ProviderAdapterProcessError({
-              provider: PROVIDER,
-              threadId: input.threadId,
-              detail: `Failed to open Pi session '${sessionFile}': ${errorDetail(cause)}`,
-              cause,
-            }),
-        })
+    const pulseSubagents = options.resolvePulseSubagents
+      ? async () => {
+          const context = sessions.get(input.threadId);
+          const turnId = context?.activeTurnId;
+          if (!turnId) throw new Error("pulse_subagents requires an active parent turn.");
+          return await options.resolvePulseSubagents!({
+            threadId: input.threadId,
+            turnId,
+            cwd,
+            modelSelection: input.modelSelection ?? {
+              instanceId: options.instanceId,
+              model: context?.piSession.model
+                ? `${context.piSession.model.provider}/${context.piSession.model.id}`
+                : "",
+            },
+          });
+        }
       : undefined;
     const scope = yield* Scope.make();
-    const thinkingLevel = resolveThinkingLevel({ modelSelection: input.modelSelection });
-    const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-    const issuedAt = DateTime.nowUnsafe().epochMilliseconds;
-    const piPulseTools = mcpSession
-      ? makePiPulseTools({
-          environmentId: mcpSession.environmentId,
-          threadId: input.threadId,
-          providerInstanceId: options.instanceId,
-          providerSessionId: mcpSession.providerSessionId,
-          makeSnapshotToolView: (snapshot) =>
-            runPromise(
-              makePreviewAutomationSnapshotToolView({
-                stateDir: serverConfig.stateDir,
-                threadId: input.threadId,
-                snapshot,
-              }).pipe(
-                Effect.provideService(FileSystem.FileSystem, fileSystem),
-                Effect.provideService(Path.Path, path),
-              ),
-            ),
-          issuedAt,
-          expiresAt: Number.MAX_SAFE_INTEGER,
-        })
-      : [];
-    const created = yield* Effect.tryPromise({
-      try: async () => {
-        const created = await (options.createAgentSession ?? createAgentSession)({
-          cwd,
-          ...(settings.agentDir ? { agentDir: settings.agentDir } : {}),
-          modelRuntime: options.modelRuntime,
-          model,
-          ...(thinkingLevel ? { thinkingLevel } : {}),
-          ...(sessionManager ? { sessionManager } : {}),
-          ...(settings.tools.length > 0
-            ? {
-                tools: [
-                  ...new Set([
-                    ...settings.tools,
-                    ...(piPulseTools.length > 0 ? PULSE_PI_TOOL_NAMES : []),
-                  ]),
-                ],
-              }
-            : {}),
-          ...(settings.excludeTools.length > 0 ? { excludeTools: [...settings.excludeTools] } : {}),
-          ...(settings.noTools ? { noTools: settings.noTools } : {}),
-          ...(piPulseTools.length > 0 ? { customTools: piPulseTools } : {}),
-        });
-        await created.session.bindExtensions({ mode: "rpc" });
-        return created;
-      },
-      catch: (cause) =>
-        new ProviderAdapterProcessError({
-          provider: PROVIDER,
-          threadId: input.threadId,
-          detail: errorDetail(cause),
-          cause,
-        }),
-    }).pipe(Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)));
-
+    const created = yield* createPiSession({
+      settings,
+      modelRuntime: options.modelRuntime,
+      randomUUID,
+      environment: options.environment,
+      instanceId: options.instanceId,
+      threadId: input.threadId,
+      cwd,
+      modelSlug: input.modelSelection?.model,
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+      scope,
+      fileSystem,
+      path,
+      serverConfig: serverConfig as ServerConfig["Service"],
+      ...(pulseSubagents ? { pulseSubagents } : {}),
+      ...(options.createAgentSession ? { createAgentSession: options.createAgentSession } : {}),
+    });
     const createdAt = yield* nowIso;
-    const resumeCursor = buildResumeCursor(created.session);
+    const resumeCursor = created.resumeCursor;
     const session: ProviderSession = {
       provider: PROVIDER,
       providerInstanceId: options.instanceId,
       status: "ready",
       runtimeMode: input.runtimeMode,
       cwd,
-      model: `${model.provider}/${model.id}`,
+      model: created.modelSlug,
       threadId: input.threadId,
       ...(resumeCursor ? { resumeCursor } : {}),
       createdAt,
@@ -2420,6 +2441,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     capabilities: { sessionModelSwitch: "in-session", inputQueueMutation: true },
     startSession,
     sendTurn,
+    deliverSubagentResult,
     interruptTurn,
     mutateInputQueue,
     respondToRequest: (_threadId, requestId) =>

@@ -8,12 +8,14 @@ import {
   ThreadId,
   TurnId,
   ProviderInstanceId,
+  SubagentId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import { OrchestrationDomainEventBusLive } from "../Services/OrchestrationDomainEventSubscription.ts";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -2672,6 +2674,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
 
 const engineLayer = it.layer(
   OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationDomainEventBusLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(ThreadBackgroundLiveness.layer),
     Layer.provide(ThreadPlanProgress.layer),

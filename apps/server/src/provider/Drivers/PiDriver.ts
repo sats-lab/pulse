@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { makePiTextGeneration } from "../../textGeneration/PiTextGeneration.ts";
@@ -22,6 +23,9 @@ import {
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import { makePiModelRuntime } from "../pi/PiModelRuntime.ts";
+import { makePiSubagentDriver } from "../pi/PiSubagentDriver.ts";
+import { PiSubagentDriverRegistry } from "../pi/PiSubagentDriverRegistry.ts";
+import { PulseSubagentsRuntimeBridge } from "../pi/PulseSubagentsRuntimeBridge.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -38,7 +42,9 @@ export type PiDriverEnv =
   | FileSystem.FileSystem
   | Path.Path
   | ServerConfig
-  | ServerSettingsService;
+  | ServerSettingsService
+  | PiSubagentDriverRegistry
+  | PulseSubagentsRuntimeBridge;
 
 const withInstanceIdentity =
   (input: {
@@ -77,14 +83,64 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       });
       const runtime = yield* makePiModelRuntime({ settings: effectiveConfig, environment });
       const serverSettings = yield* ServerSettingsService;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const subagentRegistry = yield* PiSubagentDriverRegistry;
+      const capability = (input: {
+        readonly subagent: import("@t3tools/contracts").PulseSubagent;
+        readonly cwd: string;
+      }) =>
+        Effect.gen(function* () {
+          const childScope = yield* Scope.make();
+          return yield* makePiSubagentDriver({
+            ...input,
+            settings: effectiveConfig,
+            modelRuntime: runtime.modelRuntime,
+            environment: runtime.environment,
+            instanceId,
+            scope: childScope,
+            modelSlug: input.subagent.metadata.model,
+            fileSystem,
+            path,
+            serverConfig,
+          });
+        });
+      yield* subagentRegistry.register(instanceId, capability);
+      yield* Effect.addFinalizer(() => subagentRegistry.unregister(instanceId, capability));
       const maintenanceCapabilities = makeManualOnlyProviderMaintenanceCapabilities({
         provider: DRIVER_KIND,
         packageName: "@earendil-works/pi-coding-agent",
       });
+      const bridge = yield* PulseSubagentsRuntimeBridge;
+      const effectContext = yield* Effect.context<never>();
+      const runPromiseWith = Effect.runPromiseWith(effectContext);
       const adapter = yield* makePiAdapter(effectiveConfig, {
         instanceId,
         modelRuntime: runtime.modelRuntime,
         environment: runtime.environment,
+        resolvePulseSubagents: (context) =>
+          context.turnId
+            ? runPromiseWith(
+                bridge.resolve({
+                  threadId: context.threadId,
+                  turnId: context.turnId,
+                  providerInstanceId: instanceId,
+                  cwd: context.cwd,
+                  ...(context.modelSelection?.model
+                    ? {
+                        modelSelection: {
+                          instanceId,
+                          model: context.modelSelection.model,
+                          ...(context.modelSelection.options
+                            ? { options: context.modelSelection.options }
+                            : {}),
+                        },
+                      }
+                    : {}),
+                }),
+              )
+            : Promise.reject(new Error("pulse_subagents requires an active parent turn.")),
       });
       const textGeneration = yield* makePiTextGeneration({
         settings: effectiveConfig,

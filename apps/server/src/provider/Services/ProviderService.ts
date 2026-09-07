@@ -23,6 +23,8 @@ import type {
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderDeliverSubagentResultInput,
+  ProviderDeliverSubagentResultResult,
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
@@ -55,6 +57,10 @@ export interface ProviderServiceShape {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  readonly deliverSubagentResult?: (
+    input: ProviderDeliverSubagentResultInput,
+  ) => Effect.Effect<ProviderDeliverSubagentResultResult, ProviderServiceError>;
 
   /**
    * Interrupt a running provider turn.

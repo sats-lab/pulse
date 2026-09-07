@@ -2154,6 +2154,8 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processInputSafely);
 
+  const pulseSubagentThreads = new Map<string, string>();
+
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* forkParked(
@@ -2163,10 +2165,46 @@ const make = Effect.gen(function* () {
       );
       yield* forkParked(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-          if (event.type !== "thread.turn-start-requested") {
-            return Effect.void;
+          if (event.type === "thread.turn-start-requested") {
+            return worker.enqueue({ source: "domain", event });
           }
-          return worker.enqueue({ source: "domain", event });
+          if (event.aggregateKind !== "subagent") return Effect.void;
+          const statusByType: Record<string, string> = {
+            "subagent.created": "pending",
+            "subagent.attached": "starting",
+            "subagent.started": "running",
+            "subagent.progressed": "running",
+            "subagent.waited": "waiting",
+            "subagent.idled": "idle",
+            "subagent.stop-requested": "stop-requested",
+            "subagent.completed": "completed",
+            "subagent.failed": "failed",
+            "subagent.stopped": "stopped",
+            "subagent.interrupted": "interrupted",
+          };
+          const status = statusByType[event.type];
+          if (status === undefined) return Effect.void;
+          const subagent = "subagent" in event.payload ? event.payload.subagent : undefined;
+          if (subagent !== undefined)
+            pulseSubagentThreads.set(event.aggregateId, subagent.origin.threadId);
+          const threadId = subagent?.origin.threadId ?? pulseSubagentThreads.get(event.aggregateId);
+          if (threadId === undefined) return Effect.void;
+          return Effect.sync(() =>
+            threadBackgroundLiveness.recordTaskLiveness({
+              threadId,
+              taskId: `pulse-subagent:${event.aggregateId}`,
+              taskType: "subagent",
+              agentId: undefined,
+              status,
+              kind:
+                status === "completed" ||
+                status === "failed" ||
+                status === "stopped" ||
+                status === "interrupted"
+                  ? "completed"
+                  : "updated",
+            }),
+          );
         }),
       );
     });

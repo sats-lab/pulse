@@ -53,6 +53,11 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
+import { SubagentExecutionReactorLive } from "./orchestration/Layers/SubagentExecutionReactor.ts";
+import { PiSubagentDriverFactoryLive } from "./orchestration/Layers/PiSubagentDriverFactory.ts";
+import { PiSubagentDriverRegistryLive } from "./provider/pi/PiSubagentDriverRegistry.ts";
+import { layer as SubagentLiveRegistryLayer } from "./orchestration/Services/SubagentLiveRegistry.ts";
+import { SubagentResultDeliveryReactorLive } from "./orchestration/Layers/SubagentResultDeliveryReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
@@ -106,6 +111,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import { PulseSubagentsRuntimeBridgeLive } from "./provider/pi/PulseSubagentsRuntimeBridge.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -236,8 +242,20 @@ const PlatformServicesLive = Layer.unwrap(
   }),
 );
 
+const SubagentRuntimeRegistriesLive = Layer.mergeAll(
+  PiSubagentDriverRegistryLive,
+  SubagentLiveRegistryLayer,
+);
+
 const ReactorLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(OrchestrationReactorLive),
+  Layer.provideMerge(
+    OrchestrationReactorLive.pipe(
+      Layer.provideMerge(
+        SubagentExecutionReactorLive.pipe(Layer.provide(PiSubagentDriverFactoryLive)),
+      ),
+    ),
+  ),
+  Layer.provideMerge(SubagentResultDeliveryReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
@@ -360,13 +378,16 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  Layer.provideMerge(ProviderLayerLive),
+const OrchestrationWithPulseSubagentsLive = PulseSubagentsRuntimeBridgeLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
-  // Core Services
+const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
+  Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(OrchestrationWithPulseSubagentsLive),
+);
+
+const RuntimeCoreServicesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -377,23 +398,21 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-  // Shared native/canonical NDJSON writers used by both the per-instance
-  // drivers (native stream, written from inside each `<X>Adapter`) and
-  // `ProviderService` (canonical stream, written after event normalization).
-  // Provided once at the runtime level so every consumer sees the same
-  // logger instances.
+  Layer.provideMerge(SubagentRuntimeRegistriesLive),
+  Layer.provideMerge(OrchestrationWithPulseSubagentsLive),
+  // Keep these as an ordered provide chain. ProviderService and the
+  // per-instance drivers consume the shared logger service, while the
+  // supporting layers below have dependencies on one another.
   Layer.provideMerge(ProviderEventLoggers.layer),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
@@ -679,5 +698,4 @@ export const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// The CLI supplies configuration.
 export const runServer = Layer.launch(makeServerLayer);

@@ -723,6 +723,67 @@ export function emptyAgentPanelModel(): AgentPanelModel {
  * two sources are never merged (duplicate-agents failure mode). Until v2
  * lands, callers pass null and the native fold output is used.
  */
+import type { PulseSubagent } from "@t3tools/contracts";
+
+/** Adapt the durable Pulse projection to the source-neutral v2 panel shape. */
+export function mapPulseSubagentToRuntimeSubagent(subagent: PulseSubagent): RuntimeSubagent {
+  const status: RuntimeSubagentStatus =
+    subagent.status === "created" || subagent.status === "starting"
+      ? "pending"
+      : subagent.status === "stop-requested"
+        ? "waiting"
+        : subagent.status === "stopped"
+          ? "cancelled"
+          : subagent.status;
+  const terminal = isTerminalSubagentStatus(status);
+  const firstSeenAt = subagent.createdAt;
+  const updatedAt =
+    subagent.terminalAt ??
+    subagent.idleAt ??
+    subagent.waitingAt ??
+    subagent.startedAt ??
+    subagent.attachedAt ??
+    subagent.createdAt;
+  return {
+    id: subagent.id,
+    kind: "subagent",
+    title: subagent.title,
+    role: null,
+    model: subagent.metadata.model,
+    effort: subagent.effort ?? subagent.thinking ?? null,
+    status,
+    activationCount: 1,
+    usage: null,
+    progress: subagent.progress ?? null,
+    lastToolName: null,
+    result: subagent.result ?? null,
+    error: subagent.error ?? null,
+    outputFile: null,
+    parentAgentId: null,
+    agentIndex: null,
+    phaseIndex: null,
+    phaseTitle: null,
+    attempt: null,
+    workflowName: null,
+    phases: [],
+    runHandles: null,
+    recentActivity: [],
+    firstSeenAt,
+    startedAt: subagent.startedAt ?? null,
+    completedAt: terminal ? (subagent.terminalAt ?? null) : null,
+    updatedAt,
+  };
+}
+
+export function mapPulseSubagentsToRuntimeSubagents(
+  subagents: ReadonlyArray<PulseSubagent>,
+  threadId: string,
+): ReadonlyArray<RuntimeSubagent> {
+  return subagents
+    .filter((subagent) => subagent.origin.threadId === threadId)
+    .map(mapPulseSubagentToRuntimeSubagent);
+}
+
 export function deriveAgentPanelModel({
   agents,
   v2Projection,

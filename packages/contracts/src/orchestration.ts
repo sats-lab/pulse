@@ -22,6 +22,44 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import {
+  PulseSubagent,
+  SubagentCreateCommand,
+  SubagentCreatedPayload,
+  SubagentId,
+  SubagentAttachCommand,
+  SubagentStartCommand,
+  SubagentProgressCommand,
+  SubagentWaitCommand,
+  SubagentIdleCommand,
+  SubagentStopRequestCommand,
+  SubagentCompleteCommand,
+  SubagentFailCommand,
+  SubagentStopCommand,
+  SubagentInterruptCommand,
+  ResultDeliveryId,
+  ResultDeliveryAttemptCommand,
+  ResultDeliveryDeliverCommand,
+  ResultDeliveryRetryCommand,
+  ResultDeliveryBlockCommand,
+  ResultDeliveryCancelCommand,
+  ResultDeliveryQueuedPayload,
+  ResultDeliveryAttemptedPayload,
+  ResultDeliveryDeliveredPayload,
+  ResultDeliveryRetryScheduledPayload,
+  ResultDeliveryBlockedPayload,
+  ResultDeliveryCancelledPayload,
+  SubagentAttachedPayload,
+  SubagentStartedPayload,
+  SubagentProgressedPayload,
+  SubagentWaitedPayload,
+  SubagentIdledPayload,
+  SubagentStopRequestedPayload,
+  SubagentCompletedPayload,
+  SubagentFailedPayload,
+  SubagentStoppedPayload,
+  SubagentInterruptedPayload,
+} from "./pulseSubagents.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -412,6 +450,9 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  subagents: Schema.optional(Schema.Array(PulseSubagent)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -487,6 +528,9 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
+  subagents: Schema.optional(Schema.Array(PulseSubagent)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
@@ -613,6 +657,10 @@ export type OrchestrationThreadDetailPage = typeof OrchestrationThreadDetailPage
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
+  /** Durable Pulse subagents belonging to this thread. */
+  subagents: Schema.optional(Schema.Array(PulseSubagent)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   // Present only on windowed responses. Absent on full snapshots (and from
   // pre-pagination servers), which clients treat as fully loaded.
   page: Schema.optional(OrchestrationThreadDetailPage),
@@ -1066,6 +1114,22 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  SubagentCreateCommand,
+  SubagentAttachCommand,
+  SubagentStartCommand,
+  SubagentProgressCommand,
+  SubagentWaitCommand,
+  SubagentIdleCommand,
+  SubagentStopRequestCommand,
+  SubagentCompleteCommand,
+  SubagentFailCommand,
+  SubagentStopCommand,
+  SubagentInterruptCommand,
+  ResultDeliveryAttemptCommand,
+  ResultDeliveryDeliverCommand,
+  ResultDeliveryRetryCommand,
+  ResultDeliveryBlockCommand,
+  ResultDeliveryCancelCommand,
   ThreadSessionSetCommand,
   ThreadMessageUserObservedCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1115,10 +1179,27 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "subagent.created",
+  "subagent.attached",
+  "subagent.started",
+  "subagent.progressed",
+  "subagent.waited",
+  "subagent.idled",
+  "subagent.stop-requested",
+  "subagent.completed",
+  "subagent.failed",
+  "subagent.stopped",
+  "subagent.interrupted",
+  "result-delivery.queued",
+  "result-delivery.attempted",
+  "result-delivery.delivered",
+  "result-delivery.retry-scheduled",
+  "result-delivery.blocked",
+  "result-delivery.cancelled",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "subagent"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -1376,8 +1457,6 @@ export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
 const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
-  aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1388,152 +1467,259 @@ const EventBaseFields = {
 export const OrchestrationEvent = Schema.Union([
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("subagent.created"),
+    aggregateKind: Schema.Literal("subagent"),
+    aggregateId: SubagentId,
+    payload: SubagentCreatedPayload,
+  }),
+  ...(
+    [
+      ["subagent.attached", SubagentAttachedPayload],
+      ["subagent.started", SubagentStartedPayload],
+      ["subagent.progressed", SubagentProgressedPayload],
+      ["subagent.waited", SubagentWaitedPayload],
+      ["subagent.idled", SubagentIdledPayload],
+      ["subagent.stop-requested", SubagentStopRequestedPayload],
+      ["subagent.completed", SubagentCompletedPayload],
+      ["subagent.failed", SubagentFailedPayload],
+      ["subagent.stopped", SubagentStoppedPayload],
+      ["subagent.interrupted", SubagentInterruptedPayload],
+    ] as const
+  ).map(([type, payload]) =>
+    Schema.Struct({
+      ...EventBaseFields,
+      type: Schema.Literal(type),
+      aggregateKind: Schema.Literal("subagent"),
+      aggregateId: SubagentId,
+      payload,
+    }),
+  ),
+  ...(
+    [
+      ["result-delivery.queued", ResultDeliveryQueuedPayload],
+      ["result-delivery.attempted", ResultDeliveryAttemptedPayload],
+      ["result-delivery.delivered", ResultDeliveryDeliveredPayload],
+      ["result-delivery.retry-scheduled", ResultDeliveryRetryScheduledPayload],
+      ["result-delivery.blocked", ResultDeliveryBlockedPayload],
+      ["result-delivery.cancelled", ResultDeliveryCancelledPayload],
+    ] as const
+  ).map(([type, payload]) =>
+    Schema.Struct({
+      ...EventBaseFields,
+      type: Schema.Literal(type),
+      aggregateKind: Schema.Literal("subagent"),
+      aggregateId: SubagentId,
+      payload,
+    }),
+  ),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("project.created"),
+    aggregateKind: Schema.Literal("project"),
+    aggregateId: ProjectId,
     payload: ProjectCreatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.meta-updated"),
+    aggregateKind: Schema.Literal("project"),
+    aggregateId: ProjectId,
     payload: ProjectMetaUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.deleted"),
+    aggregateKind: Schema.Literal("project"),
+    aggregateId: ProjectId,
     payload: ProjectDeletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.created"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadCreatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.deleted"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadDeletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.archived"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadArchivedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.unarchived"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadUnarchivedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.settled"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadSettledPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.unsettled"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadUnsettledPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.snoozed"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadSnoozedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.unsnoozed"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadUnsnoozedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.pinned"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadPinnedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.unpinned"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadUnpinnedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.pin-reordered"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadPinReorderedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadMetaUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.runtime-mode-set"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadRuntimeModeSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadInteractionModeSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadMessageSentPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadTurnStartRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadTurnInterruptRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.input-queue-mutation-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadInputQueueMutationRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.approval-response-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadApprovalResponseRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.user-input-response-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadUserInputResponseRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.checkpoint-revert-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadCheckpointRevertRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.reverted"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadRevertedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.session-stop-requested"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadSessionStopRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadSessionSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.proposed-plan-upserted"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadProposedPlanUpsertedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-diff-completed"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadTurnDiffCompletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
     payload: ThreadActivityAppendedPayload,
   }),
 ]);

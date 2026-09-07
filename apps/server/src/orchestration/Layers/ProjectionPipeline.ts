@@ -4,7 +4,12 @@ import {
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
+  SubagentId,
 } from "@t3tools/contracts";
+import {
+  createEmptyReadModel,
+  projectEvent as projectSubagentLifecycleEvent,
+} from "../projector.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -13,7 +18,11 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
+import {
+  ProjectionRepositoryMissingSubagentError,
+  toPersistenceSqlError,
+  type ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
@@ -34,6 +43,8 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionSubagentRepository } from "../../persistence/Services/ProjectionSubagents.ts";
+
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -65,6 +76,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  subagents: "projection.subagents",
 } as const;
 
 type ProjectorName =
@@ -480,6 +492,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+    const projectionSubagentRepository = yield* ProjectionSubagentRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1481,6 +1494,55 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     });
 
     const applyCheckpointsProjection: ProjectorDefinition["apply"] = () => Effect.void;
+    const applySubagentsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applySubagentsProjection",
+    )(function* (event) {
+      if (event.type === "subagent.created") {
+        yield* projectionSubagentRepository.upsert(event.payload.subagent);
+        return;
+      }
+      if (
+        event.aggregateKind !== "subagent" ||
+        (event.type !== "subagent.attached" &&
+          event.type !== "subagent.started" &&
+          event.type !== "subagent.progressed" &&
+          event.type !== "subagent.waited" &&
+          event.type !== "subagent.idled" &&
+          event.type !== "subagent.stop-requested" &&
+          event.type !== "subagent.completed" &&
+          event.type !== "subagent.failed" &&
+          event.type !== "subagent.stopped" &&
+          event.type !== "subagent.interrupted" &&
+          !event.type.startsWith("result-delivery."))
+      ) {
+        return;
+      }
+      const subagentId = event.aggregateId;
+      const existing = yield* projectionSubagentRepository.getById({ subagentId });
+      if (Option.isNone(existing)) {
+        return yield* new ProjectionRepositoryMissingSubagentError({
+          subagentId,
+          eventType: event.type,
+        });
+      }
+      const model = {
+        ...createEmptyReadModel(event.occurredAt),
+        subagents: [existing.value],
+      };
+      const next = yield* projectSubagentLifecycleEvent(model, event).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProjectionRepositoryMissingSubagentError({
+              subagentId,
+              eventType: `${event.type}: ${error.issue}`,
+            }),
+        ),
+      );
+      const updated = next.subagents?.find((subagent) => subagent.id === subagentId);
+      if (updated !== undefined) {
+        yield* projectionSubagentRepository.upsert(updated);
+      }
+    });
 
     const applyPendingApprovalsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyPendingApprovalsProjection",
@@ -1638,6 +1700,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
         apply: applyPendingApprovalsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.subagents,
+        apply: applySubagentsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threads,

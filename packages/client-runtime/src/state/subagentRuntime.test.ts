@@ -8,8 +8,12 @@ import {
   isAgentAttributedToolActivity,
   isSubagentActivityKind,
   isTimelineBypassActivity,
+  mapPulseSubagentToRuntimeSubagent,
+  mapPulseSubagentsToRuntimeSubagents,
   workflowCardMembers,
 } from "./subagentRuntime.ts";
+import { PulseSubagent } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 let sequence = 0;
 /**
@@ -819,6 +823,78 @@ describe("task type classification is a denylist", () => {
       activity("task.started", { taskId: "a2", taskType: "some_future_agent_kind", title: "X" }),
     ]);
     expect(agents.map((agent) => agent.id).toSorted()).toEqual(["a1", "a2"]);
+  });
+});
+
+describe("durable Pulse subagents", () => {
+  const decode = Schema.decodeUnknownSync(PulseSubagent);
+  const makePulse = (overrides: Record<string, unknown>) =>
+    decode({
+      id: "pulse-1",
+      title: "Research",
+      prompt: "research",
+      origin: { projectId: "project-1", threadId: "thread-1", turnId: "turn-1" },
+      metadata: { provider: "pi", providerInstanceId: "pi", model: "gpt-5" },
+      delivery: "started",
+      createdAt: "2026-08-01T10:00:00.000Z",
+      ...overrides,
+    });
+
+  it("maps every lifecycle status and filters by thread", () => {
+    const statuses = [
+      "created",
+      "starting",
+      "running",
+      "waiting",
+      "idle",
+      "stop-requested",
+      "completed",
+      "failed",
+      "stopped",
+      "interrupted",
+    ] as const;
+    const mapped = statuses.map((status, index) =>
+      mapPulseSubagentToRuntimeSubagent(makePulse({ id: `pulse-${index}`, status })),
+    );
+    expect(mapped.map((agent) => agent.status)).toEqual([
+      "pending",
+      "pending",
+      "running",
+      "waiting",
+      "idle",
+      "waiting",
+      "completed",
+      "failed",
+      "cancelled",
+      "interrupted",
+    ]);
+    expect(
+      mapPulseSubagentsToRuntimeSubagents(
+        [
+          makePulse({}),
+          makePulse({
+            id: "other",
+            origin: { projectId: "project-1", threadId: "thread-2", turnId: "turn-1" },
+          }),
+        ],
+        "thread-1",
+      ).map((agent) => agent.id),
+    ).toEqual(["pulse-1"]);
+  });
+
+  it("uses the durable projection as an exclusive source", () => {
+    const durable = mapPulseSubagentToRuntimeSubagent(makePulse({ id: "durable" }));
+    const legacy = { ...durable, id: "legacy" };
+    expect(
+      deriveAgentPanelModel({ agents: [legacy], v2Projection: [durable] }).directAgents.map(
+        (agent) => agent.id,
+      ),
+    ).toEqual(["durable"]);
+    expect(
+      deriveAgentPanelModel({ agents: [legacy], v2Projection: null }).directAgents.map(
+        (agent) => agent.id,
+      ),
+    ).toEqual(["legacy"]);
   });
 });
 

@@ -153,6 +153,7 @@ import { AgentsPanel } from "./AgentsPanel";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
+  mapPulseSubagentsToRuntimeSubagents,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
@@ -2163,17 +2164,23 @@ function ChatViewContent(props: ChatViewProps) {
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
-  // Native subagent fold: memoized by activity-list identity, shared by the
-  // Agents surface, live strip, and workflow cards. v2Projection is null
-  // until orchestration-v2 lands (source precedence lives in the derive).
+  // Durable Pulse projection wins over legacy task activities. The shell
+  // snapshot is already threaded to every client and is the canonical source.
   // sessionLive derives interruption for agents orphaned by session death.
   const agentSessionLive = phase !== "disconnected";
   const agentPanelModel = useMemo(
     () =>
       deriveAgentPanelModel({
         agents: foldSubagentActivities(threadActivities, { sessionLive: agentSessionLive }),
+        v2Projection:
+          activeEnvironmentShell.data?.snapshot._tag === "Some"
+            ? mapPulseSubagentsToRuntimeSubagents(
+                activeEnvironmentShell.data.snapshot.value.subagents ?? [],
+                activeThread?.id ?? "",
+              )
+            : null,
       }),
-    [agentSessionLive, threadActivities],
+    [activeEnvironmentShell.data, activeThread?.id, agentSessionLive, threadActivities],
   );
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),

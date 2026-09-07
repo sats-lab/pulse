@@ -115,6 +115,7 @@ const BASE_THREAD: OrchestrationThread = {
 const WINDOWED_SNAPSHOT: OrchestrationThreadDetailSnapshot = {
   snapshotSequence: 10,
   thread: BASE_THREAD,
+  subagents: [],
   page: { beforeCursor: "cursor-1", hasMore: true, snapshotSequence: 10 },
 };
 
@@ -125,6 +126,7 @@ const OLDER_PAGE: OrchestrationThreadDetailSnapshot = {
     messages: [OLDER_MESSAGE],
     checkpoints: [checkpoint("turn-1", 1)],
   },
+  subagents: [],
   page: { beforeCursor: null, hasMore: false, snapshotSequence: 10 },
 };
 

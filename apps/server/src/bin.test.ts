@@ -41,17 +41,21 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { PulseSubagentsRuntimeBridgeTestLive } from "./provider/pi/PulseSubagentsRuntimeBridge.test-support.ts";
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+const CliRuntimeLayer = Layer.mergeAll(
+  NodeServices.layer,
+  NetService.layer,
+  PulseSubagentsRuntimeBridgeTestLive,
+);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
 
 const connectCli = makeCli({ cloudEnabled: true });
 const noConnectCli = makeCli({ cloudEnabled: false });
 const runCli = (args: ReadonlyArray<string>, command = cli) =>
-  Command.runWith(command, { version: "0.0.0" })(args);
+  Command.runWith(command, { version: "0.0.0" })(args).pipe(Effect.provide(CliRuntimeLayer));
 const runConnectCli = (args: ReadonlyArray<string>) => runCli(args, connectCli);
-const runCliWithRuntime = (args: ReadonlyArray<string>) =>
-  runCli(args).pipe(Effect.provide(CliRuntimeLayer));
+const runCliWithRuntime = (args: ReadonlyArray<string>) => runCli(args);
 
 const captureStdout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {

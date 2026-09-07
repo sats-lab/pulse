@@ -80,6 +80,35 @@ export const ProviderSendTurnInput = Schema.Struct({
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
+export const ProviderSubagentResultEnvelope = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  subagentId: TrimmedNonEmptyString,
+  originTurnId: TurnId,
+  title: TrimmedNonEmptyString,
+  result: Schema.String,
+});
+export type ProviderSubagentResultEnvelope = typeof ProviderSubagentResultEnvelope.Type;
+
+export const ProviderDeliverSubagentResultInput = Schema.Struct({
+  parentThreadId: ThreadId,
+  deliveryId: TrimmedNonEmptyString,
+  subagentId: TrimmedNonEmptyString,
+  originTurnId: TurnId,
+  title: TrimmedNonEmptyString,
+  result: Schema.NullOr(Schema.String),
+});
+export type ProviderDeliverSubagentResultInput = typeof ProviderDeliverSubagentResultInput.Type;
+
+export const ProviderDeliverSubagentResultResult = Schema.Struct({
+  provider: ProviderDriverKind,
+  providerInstanceId: ProviderInstanceId,
+  piSessionId: Schema.optional(Schema.String),
+  accepted: Schema.Boolean,
+  alreadyPresent: Schema.Boolean,
+  acceptedAt: IsoDateTime,
+});
+export type ProviderDeliverSubagentResultResult = typeof ProviderDeliverSubagentResultResult.Type;
+
 export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,

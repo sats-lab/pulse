@@ -19,6 +19,8 @@ import type {
   ProviderListSkillsResult,
   ProviderListCommandsResult,
   ProviderSendTurnInput,
+  ProviderDeliverSubagentResultInput,
+  ProviderDeliverSubagentResultResult,
   ProviderSession,
   ProviderSessionStartInput,
   ThreadId,
@@ -68,6 +70,10 @@ export interface ProviderAdapterShape<TError> {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  readonly deliverSubagentResult?: (
+    input: ProviderDeliverSubagentResultInput,
+  ) => Effect.Effect<ProviderDeliverSubagentResultResult, TError>;
 
   /**
    * Interrupt an active turn.

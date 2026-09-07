@@ -3,6 +3,7 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  SubagentId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -37,7 +38,7 @@ import {
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
-import { decideOrchestrationCommand } from "../decider.ts";
+import { decideOrchestrationCommand, type IdempotentCommandDecision } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -45,6 +46,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { OrchestrationDomainEventBus } from "../Services/OrchestrationDomainEventSubscription.ts";
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
@@ -57,10 +59,28 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "thread" | "subagent";
+  readonly aggregateId: ProjectId | ThreadId | SubagentId;
 } {
   switch (command.type) {
+    case "subagent.create":
+    case "subagent.attach":
+    case "subagent.start":
+    case "subagent.progress":
+    case "subagent.wait":
+    case "subagent.idle":
+    case "subagent.stop-request":
+    case "subagent.complete":
+    case "subagent.fail":
+    case "subagent.stop":
+    case "subagent.interrupt":
+      return { aggregateKind: "subagent", aggregateId: command.subagentId };
+    case "result-delivery.attempt":
+    case "result-delivery.deliver":
+    case "result-delivery.retry":
+    case "result-delivery.block":
+    case "result-delivery.cancel":
+      return { aggregateKind: "subagent", aggregateId: command.subagentId };
     case "project.create":
     case "project.meta.update":
     case "project.delete":
@@ -88,7 +108,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   let commandReadModel = createEmptyReadModel(yield* nowIso);
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
-  const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const eventPubSub = yield* OrchestrationDomainEventBus;
 
   const projectEventsOntoReadModel = (
     baseReadModel: OrchestrationReadModel,
@@ -165,6 +185,19 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
+        if ("_tag" in eventBase && eventBase._tag === "IdempotentCommandDecision") {
+          const sequence = commandReadModel.snapshotSequence;
+          yield* commandReceiptRepository.upsert({
+            commandId: envelope.command.commandId,
+            aggregateKind: aggregateRef.aggregateKind,
+            aggregateId: aggregateRef.aggregateId,
+            acceptedAt: yield* nowIso,
+            resultSequence: sequence,
+            status: "accepted",
+            error: null,
+          });
+          return { sequence };
+        }
         const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
         const committedCommand = yield* sql
           .withTransaction(
@@ -180,7 +213,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
 
               const lastSavedEvent = committedEvents.at(-1) ?? null;
-              if (lastSavedEvent === null) {
+              const receiptEvent =
+                committedEvents.find(
+                  (event) =>
+                    event.aggregateKind === aggregateRef.aggregateKind &&
+                    event.aggregateId === aggregateRef.aggregateId,
+                ) ?? lastSavedEvent;
+              if (lastSavedEvent === null || receiptEvent === null) {
                 return yield* new OrchestrationCommandInvariantError({
                   commandType: envelope.command.type,
                   detail: "Command produced no events.",
@@ -189,9 +228,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
               yield* commandReceiptRepository.upsert({
                 commandId: envelope.command.commandId,
-                aggregateKind: lastSavedEvent.aggregateKind,
-                aggregateId: lastSavedEvent.aggregateId,
-                acceptedAt: lastSavedEvent.occurredAt,
+                aggregateKind: aggregateRef.aggregateKind,
+                aggregateId: aggregateRef.aggregateId,
+                acceptedAt: receiptEvent.occurredAt,
                 resultSequence: lastSavedEvent.sequence,
                 status: "accepted",
                 error: null,

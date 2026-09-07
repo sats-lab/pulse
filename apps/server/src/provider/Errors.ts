@@ -104,6 +104,11 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
 /**
  * ProviderUnsupportedError - Requested provider is not implemented.
  */
+export class ProviderDeliveryRetryableError extends Schema.TaggedErrorClass<ProviderDeliveryRetryableError>()(
+  "ProviderDeliveryRetryableError",
+  { provider: Schema.String, threadId: Schema.String, detail: Schema.String },
+) {}
+
 export class ProviderUnsupportedError extends Schema.TaggedErrorClass<ProviderUnsupportedError>()(
   "ProviderUnsupportedError",
   {
@@ -197,6 +202,7 @@ export type ProviderAdapterError =
 export type ProviderServiceError =
   | ProviderValidationError
   | ProviderUnsupportedError
+  | ProviderDeliveryRetryableError
   | ProviderInstanceNotFoundError
   | ProviderSessionNotFoundError
   | ProviderSessionDirectoryPersistenceError

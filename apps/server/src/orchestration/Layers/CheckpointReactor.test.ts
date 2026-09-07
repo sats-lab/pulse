@@ -24,6 +24,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import { OrchestrationDomainEventBusLive } from "../Services/OrchestrationDomainEventSubscription.ts";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
@@ -296,6 +297,7 @@ describe("CheckpointReactor", () => {
       options?.providerName ?? ProviderDriverKind.make("codex"),
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationDomainEventBusLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(ThreadPlanProgress.layer),
